@@ -1,0 +1,360 @@
+"""
+Cortex CLI — the direct `cortex` command.
+
+Install with:
+  uv tool install .          # global command
+  uv pip install -e .        # editable dev install
+
+Usage:
+  cortex run "Design a login component"
+  cortex run --tui "Analyze auth module"
+  cortex run --tmux "Build and test user profiles"
+  cortex interactive
+  cortex index report.pdf
+  cortex agents
+  cortex status
+  cortex version
+"""
+
+from __future__ import annotations
+
+import argparse
+import asyncio
+import json
+import logging
+import os
+import sys
+import textwrap
+
+from cortex import __version__
+from cortex.config import CortexConfig
+from cortex.engine import CortexEngine
+
+# ── Logging ──────────────────────────────────────────────────────────
+
+LOG_FORMAT = "%(asctime)s │ %(name)-20s │ %(levelname)-7s │ %(message)s"
+LOG_FORMAT_SHORT = "%(levelname)-7s │ %(message)s"
+
+
+def _setup_logging(verbose: bool = False) -> None:
+    level = logging.DEBUG if verbose else logging.INFO
+    fmt = LOG_FORMAT if verbose else LOG_FORMAT_SHORT
+    logging.basicConfig(level=level, format=fmt, datefmt="%H:%M:%S")
+
+
+# ── Engine factory ───────────────────────────────────────────────────
+
+def _build_engine(args: argparse.Namespace) -> CortexEngine:
+    api_key = getattr(args, "api_key", "") or os.environ.get("ANTHROPIC_API_KEY", "")
+    model = getattr(args, "model", "claude-sonnet-4-6")
+    use_tmux = getattr(args, "tmux", False)
+
+    config = CortexConfig(
+        anthropic_api_key=api_key,
+        default_model=model,
+        use_tmux=use_tmux,
+    )
+    return CortexEngine(config=config)
+
+
+# ── Subcommands ──────────────────────────────────────────────────────
+
+async def _cmd_run(args: argparse.Namespace) -> None:
+    """Execute a single intent."""
+    engine = _build_engine(args)
+
+    if args.index:
+        doc_id = await engine.index_document(args.index)
+        logging.getLogger("cortex").info("Indexed document: %s", doc_id)
+
+    if args.tui:
+        _cmd_tui(engine, args.intent)
+        return
+
+    result = await engine.run(args.intent)
+    print(json.dumps(result, indent=2, default=str))
+
+
+async def _cmd_interactive(args: argparse.Namespace) -> None:
+    """Launch the interactive REPL."""
+    engine = _build_engine(args)
+
+    print("╔══════════════════════════════════════════════════════╗")
+    print("║  Cortex Interactive Mode                            ║")
+    print("║  Type your intent and press Enter.                  ║")
+    print("║  Commands: /status  /agents  /pages  /quit          ║")
+    print("╚══════════════════════════════════════════════════════╝")
+    print()
+
+    while True:
+        try:
+            intent = input("cortex> ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print("\nGoodbye.")
+            break
+
+        if not intent:
+            continue
+        if intent == "/quit":
+            break
+        elif intent == "/status":
+            print(json.dumps(engine.status(), indent=2))
+            continue
+        elif intent == "/agents":
+            print("Registered agents:", engine.registry.list_agents())
+            continue
+        elif intent == "/pages":
+            for p in engine.page_store.all_pages():
+                print(f"  [{p.type.value}] {p.id} — {p.summary}")
+            continue
+
+        result = await engine.run(intent)
+        if result.get("result"):
+            print()
+            if isinstance(result["result"], str):
+                print(result["result"])
+            else:
+                print(json.dumps(result["result"], indent=2, default=str))
+            print()
+        if result.get("mistakes"):
+            print(f"  ⚠ {len(result['mistakes'])} mistake(s) recorded.")
+        if result.get("lessons_learned"):
+            print("  Lessons:", "; ".join(result["lessons_learned"]))
+        print()
+
+
+def _cmd_tui(engine_or_args, intent: str | None = None) -> None:
+    """Launch the Textual TUI dashboard."""
+    from cortex.tui.app import CortexTUI
+
+    if isinstance(engine_or_args, argparse.Namespace):
+        engine = _build_engine(engine_or_args)
+        intent = getattr(engine_or_args, "intent", None)
+    else:
+        engine = engine_or_args
+
+    tui_app = CortexTUI()
+
+    if intent:
+        async def _run_intent():
+            tui_app.log_output(f"[bold]Intent:[/bold] {intent}")
+            result = await engine.run(intent)
+            tui_app.update_pages([p.to_dict() for p in engine.page_store.all_pages()])
+            tui_app.update_mistakes([m.to_dict() for m in engine.mistakes.all])
+            if result.get("result"):
+                tui_app.log_output(f"[green]Result:[/green] {str(result['result'])[:200]}")
+
+        tui_app.call_later(_run_intent)
+
+    tui_app.run()
+
+
+async def _cmd_index(args: argparse.Namespace) -> None:
+    """Index a document into the RAG store."""
+    engine = _build_engine(args)
+    for filepath in args.files:
+        doc_id = await engine.index_document(filepath)
+        print(f"Indexed: {filepath} → {doc_id}")
+
+
+def _cmd_agents(args: argparse.Namespace) -> None:
+    """List all registered agents."""
+    engine = _build_engine(args)
+    agents = engine.registry.list_agents()
+    print(f"Registered agents ({len(agents)}):")
+    for name in agents:
+        agent = engine.registry.get(name)
+        desc = agent.description if agent else ""
+        print(f"  • {name:25s} {desc}")
+
+
+def _cmd_status(args: argparse.Namespace) -> None:
+    """Show engine status."""
+    engine = _build_engine(args)
+    print(json.dumps(engine.status(), indent=2))
+
+
+def _cmd_version(_args: argparse.Namespace) -> None:
+    """Print version."""
+    print(f"cortex {__version__}")
+
+
+def _cmd_init(args: argparse.Namespace) -> None:
+    """Scaffold the .cortex/ directory structure."""
+    from cortex.scaffold.init import CortexInit
+
+    target = getattr(args, "dir", ".")
+    minimal = getattr(args, "minimal", False)
+    force = getattr(args, "force", False)
+    dry_run = getattr(args, "dry_run", False)
+
+    init = CortexInit(
+        target_dir=target,
+        minimal=minimal,
+        force=force,
+        dry_run=dry_run,
+    )
+
+    if init.is_initialized(target) and not force:
+        print(f"⚠  .cortex/ already exists in {init.target}")
+        print("   Use --force to overwrite existing files.")
+        print()
+        print(init.tree(target))
+        return
+
+    summary = init.run()
+
+    # Print results
+    print()
+    print(f"✓  Cortex initialized in {summary['target']}")
+    print()
+
+    if summary["created"]:
+        print(f"   Created ({len(summary['created'])}):")
+        for f in summary["created"]:
+            print(f"     + {f}")
+
+    if summary["skipped"]:
+        print(f"   Skipped ({len(summary['skipped'])}):")
+        for f in summary["skipped"]:
+            print(f"     · {f}")
+
+    if summary["overwritten"]:
+        print(f"   Overwritten ({len(summary['overwritten'])}):")
+        for f in summary["overwritten"]:
+            print(f"     ! {f}")
+
+    print()
+    print("   Directory structure:")
+    print()
+    for line in init.tree(target).split("\n"):
+        print(f"     {line}")
+    print()
+    print("   Next steps:")
+    print("     1. Edit CORTEX.md with your project conventions")
+    print("     2. Review .cortex/settings.json permissions")
+    print("     3. Customize rules in .cortex/rules/")
+    print("     4. Run: cortex run \"Your first intent\"")
+    print()
+
+
+def _cmd_tree(args: argparse.Namespace) -> None:
+    """Show the .cortex/ directory tree."""
+    from cortex.scaffold.init import CortexInit
+
+    target = getattr(args, "dir", ".")
+    if not CortexInit.is_initialized(target):
+        print("No .cortex/ directory found. Run `cortex init` first.")
+        return
+
+    print(CortexInit.tree(target))
+
+
+# ── Argument parser ──────────────────────────────────────────────────
+
+def _build_parser() -> argparse.ArgumentParser:
+    root = argparse.ArgumentParser(
+        prog="cortex",
+        description="Cortex — Intelligent Agent Orchestration System",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=textwrap.dedent("""\
+            Quick start:
+              cortex init                        # scaffold .cortex/ in your repo
+              cortex run "Design a login component"
+              cortex run --tui "Analyze the auth module"
+              cortex interactive
+              cortex agents
+
+            Install:
+              uv tool install .                  # global CLI
+              uv pip install -e ".[dev]"         # editable + dev deps
+              uv run cortex run "Hello world"    # run without installing
+        """),
+    )
+
+    # Global flags
+    root.add_argument("-v", "--verbose", action="store_true", help="Debug logging")
+    root.add_argument("--api-key", default="", help="Anthropic API key (or set ANTHROPIC_API_KEY)")
+    root.add_argument("--model", default="claude-sonnet-4-6", help="Default LLM model")
+
+    subs = root.add_subparsers(dest="command", title="commands")
+
+    # ── cortex run ───────────────────────────────────────────────────
+    p_run = subs.add_parser("run", help="Execute a single intent")
+    p_run.add_argument("intent", help="The intent / task to execute")
+    p_run.add_argument("--tui", action="store_true", help="Open the Textual TUI dashboard")
+    p_run.add_argument("--tmux", action="store_true", help="Spawn agents in tmux panes")
+    p_run.add_argument("--index", metavar="FILE", help="Index a document before running")
+    p_run.set_defaults(func=_cmd_run, is_async=True)
+
+    # ── cortex interactive ───────────────────────────────────────────
+    p_int = subs.add_parser("interactive", aliases=["i", "repl"], help="Interactive REPL")
+    p_int.set_defaults(func=_cmd_interactive, is_async=True)
+
+    # ── cortex tui ───────────────────────────────────────────────────
+    p_tui = subs.add_parser("tui", help="Launch TUI dashboard")
+    p_tui.add_argument("intent", nargs="?", help="Optional intent to auto-run")
+    p_tui.set_defaults(func=_cmd_tui, is_async=False)
+
+    # ── cortex index ─────────────────────────────────────────────────
+    p_idx = subs.add_parser("index", help="Index documents into the RAG store")
+    p_idx.add_argument("files", nargs="+", help="Files to index (PDF, text, etc.)")
+    p_idx.set_defaults(func=_cmd_index, is_async=True)
+
+    # ── cortex init ──────────────────────────────────────────────────
+    p_init = subs.add_parser(
+        "init",
+        help="Scaffold the .cortex/ directory in a project",
+        description="Creates the .cortex/ directory structure with rules, skills, agents, and settings.",
+    )
+    p_init.add_argument("dir", nargs="?", default=".", help="Target directory (default: current)")
+    p_init.add_argument("--minimal", action="store_true", help="Only create CORTEX.md + settings.json")
+    p_init.add_argument("--force", action="store_true", help="Overwrite existing files")
+    p_init.add_argument("--dry-run", action="store_true", help="Show what would be created without writing")
+    p_init.set_defaults(func=_cmd_init, is_async=False)
+
+    # ── cortex tree ──────────────────────────────────────────────────
+    p_tree = subs.add_parser("tree", help="Show the .cortex/ directory tree")
+    p_tree.add_argument("dir", nargs="?", default=".", help="Target directory (default: current)")
+    p_tree.set_defaults(func=_cmd_tree, is_async=False)
+
+    # ── cortex agents ────────────────────────────────────────────────
+    p_agents = subs.add_parser("agents", help="List registered agents")
+    p_agents.set_defaults(func=_cmd_agents, is_async=False)
+
+    # ── cortex status ────────────────────────────────────────────────
+    p_status = subs.add_parser("status", help="Show engine status")
+    p_status.set_defaults(func=_cmd_status, is_async=False)
+
+    # ── cortex version ───────────────────────────────────────────────
+    p_ver = subs.add_parser("version", help="Print version")
+    p_ver.set_defaults(func=_cmd_version, is_async=False)
+
+    return root
+
+
+# ── Entry point ──────────────────────────────────────────────────────
+
+def app() -> None:
+    """
+    Main entry point registered as the `cortex` console script.
+    Called by: `cortex run ...`, `cortex interactive`, etc.
+    """
+    parser = _build_parser()
+    args = parser.parse_args()
+
+    _setup_logging(args.verbose)
+
+    if not hasattr(args, "func"):
+        parser.print_help()
+        sys.exit(0)
+
+    if getattr(args, "is_async", False):
+        asyncio.run(args.func(args))
+    else:
+        args.func(args)
+
+
+# Allow `python -m cortex.cli` as well
+if __name__ == "__main__":
+    app()
