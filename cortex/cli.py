@@ -26,6 +26,8 @@ import os
 import sys
 import textwrap
 
+from pathlib import Path
+
 from cortex import __version__
 from cortex.config import CortexConfig
 from cortex.engine import CortexEngine
@@ -179,6 +181,42 @@ def _cmd_version(_args: argparse.Namespace) -> None:
     print(f"cortex {__version__}")
 
 
+def _cmd_setup(args: argparse.Namespace) -> None:
+    """One-command install: scaffold .cortex/ and verify the environment."""
+    from cortex.scaffold.init import CortexInit
+
+    target = getattr(args, "dir", ".")
+    minimal = getattr(args, "minimal", False)
+
+    print("╔══════════════════════════════════════════════════════╗")
+    print("║  Cortex Setup                                       ║")
+    print("╚══════════════════════════════════════════════════════╝")
+    print()
+
+    # 1. Scaffold
+    init = CortexInit(target_dir=target, minimal=minimal, force=False)
+    if init.is_initialized(target):
+        print("  ✓  .cortex/ already exists — skipping scaffold")
+    else:
+        summary = init.run()
+        print(f"  ✓  Scaffolded .cortex/ ({len(summary['created'])} files)")
+
+    # 2. Check API key
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if api_key:
+        print(f"  ✓  ANTHROPIC_API_KEY set ({api_key[:7]}...)")
+    else:
+        print("  ⚠  ANTHROPIC_API_KEY not set — AI agent will be disabled")
+        print("     Fix: export ANTHROPIC_API_KEY=sk-ant-...")
+
+    # 3. Print summary
+    print()
+    print("  Ready. Try:")
+    print(f'    cortex run "Hello from {Path(target).resolve().name}"')
+    print("    cortex interactive")
+    print()
+
+
 def _cmd_init(args: argparse.Namespace) -> None:
     """Scaffold the .cortex/ directory structure."""
     from cortex.scaffold.init import CortexInit
@@ -258,17 +296,20 @@ def _build_parser() -> argparse.ArgumentParser:
         description="Cortex — Intelligent Agent Orchestration System",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=textwrap.dedent("""\
+            One-line install:
+              uvx --from git+https://github.com/anthropics/cortex cortex setup
+
             Quick start:
-              cortex init                        # scaffold .cortex/ in your repo
+              cortex setup                       # install + scaffold in one shot
               cortex run "Design a login component"
               cortex run --tui "Analyze the auth module"
               cortex interactive
-              cortex agents
 
-            Install:
-              uv tool install .                  # global CLI
-              uv pip install -e ".[dev]"         # editable + dev deps
-              uv run cortex run "Hello world"    # run without installing
+            Install methods:
+              uv tool install cortex-ai          # from PyPI (global CLI)
+              uv tool install .                  # from source (global CLI)
+              uv pip install -e ".[dev]"         # editable dev install
+              pipx install cortex-ai             # pipx alternative
         """),
     )
 
@@ -300,6 +341,16 @@ def _build_parser() -> argparse.ArgumentParser:
     p_idx = subs.add_parser("index", help="Index documents into the RAG store")
     p_idx.add_argument("files", nargs="+", help="Files to index (PDF, text, etc.)")
     p_idx.set_defaults(func=_cmd_index, is_async=True)
+
+    # ── cortex setup ─────────────────────────────────────────────────
+    p_setup = subs.add_parser(
+        "setup",
+        help="One-command install: scaffold .cortex/ and verify env",
+        description="Scaffolds .cortex/ and checks your environment. The only command you need to get started.",
+    )
+    p_setup.add_argument("dir", nargs="?", default=".", help="Target directory (default: current)")
+    p_setup.add_argument("--minimal", action="store_true", help="Only create CORTEX.md + settings.json")
+    p_setup.set_defaults(func=_cmd_setup, is_async=False)
 
     # ── cortex init ──────────────────────────────────────────────────
     p_init = subs.add_parser(
