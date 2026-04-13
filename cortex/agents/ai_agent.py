@@ -1,12 +1,15 @@
 """
-AI Agent — the fully-wired working agent that calls Anthropic's Claude API.
+AI Agent — backed by the local Claude Code CLI.
 
-This is the "live demo" agent in the Cortex skeleton. It:
-  - Chooses model tier based on task complexity (Haiku for speed, Sonnet for reasoning)
-  - Writes optimized prompts for the sub-task
-  - Evaluates and scores its own output before returning
-  - Detects hallucination signals
-  - Manages token budgets
+This agent calls the locally installed `claude` command for all LLM work.
+No API key needed — Claude Code handles authentication via its own session.
+
+Capabilities:
+  - Choose model tier based on task complexity (haiku for speed, sonnet for reasoning)
+  - Write optimized prompts for sub-tasks
+  - Evaluate and score its own output before returning
+  - Detect hallucination signals
+  - Manage token budgets via Claude Code's built-in limits
 
 Rules from Cortex spec:
   - Never pass raw user input directly to a sub-agent without sanitizing intent
@@ -18,9 +21,8 @@ from __future__ import annotations
 
 import logging
 
-import anthropic
-
 from cortex.agents.base import BaseAgent
+from cortex.claude_code import ClaudeCode
 from cortex.models import (
     AgentInput,
     AgentOutput,
@@ -33,36 +35,32 @@ from cortex.models import (
 
 logger = logging.getLogger(__name__)
 
-# Model tiers
-MODEL_FAST = "claude-haiku-4-5-20251001"
-MODEL_REASON = "claude-sonnet-4-6"
-MODEL_DEEP = "claude-opus-4-6"
-
-# Token budget defaults
-DEFAULT_MAX_TOKENS = 4096
-FAST_MAX_TOKENS = 1024
+# Model tiers (Claude Code model names)
+MODEL_FAST = "haiku"
+MODEL_REASON = "sonnet"
+MODEL_DEEP = "opus"
 
 
 class AIAgent(BaseAgent):
     """
-    General-purpose AI reasoning agent backed by Anthropic Claude.
-    Fully functional — makes real API calls.
+    General-purpose AI reasoning agent backed by local Claude Code CLI.
+    Fully functional — shells out to `claude -p` for every call.
     """
 
     name = "ai_agent"
-    description = "General-purpose AI reasoning agent (Claude-backed)"
+    description = "General-purpose AI reasoning agent (Claude Code local CLI)"
     required_permissions: list[str] = []
 
-    def __init__(self, api_key: str, default_model: str = MODEL_REASON) -> None:
-        self._client = anthropic.AsyncAnthropic(api_key=api_key)
-        self._default_model = default_model
+    def __init__(self, default_model: str = MODEL_REASON, cwd: str | None = None) -> None:
+        self._claude = ClaudeCode(model=default_model, cwd=cwd)
 
     async def execute(self, agent_input: AgentInput) -> AgentOutput:
         # 1. Sanitize intent
         sanitized_intent = self._sanitize_intent(agent_input.intent)
 
         # 2. Choose model tier
-        model, max_tokens, temperature = self._select_model(sanitized_intent)
+        model = self._select_model(sanitized_intent)
+        claude = self._claude.with_model(model)
 
         # 3. Build context from relevant pages
         context_block = self._build_context(agent_input.relevant_pages)
@@ -70,15 +68,25 @@ class AIAgent(BaseAgent):
         # 4. Construct the prompt
         prompt = self._build_prompt(sanitized_intent, context_block, agent_input.constraints)
 
-        # 5. Call the API
-        logger.info("[ai_agent] Calling %s (temp=%.1f, max_tokens=%d)", model, temperature, max_tokens)
-        response = await self._client.messages.create(
-            model=model,
-            max_tokens=max_tokens,
-            temperature=temperature,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        result_text = response.content[0].text
+        # 5. Call Claude Code CLI
+        logger.info("[ai_agent] Calling claude -p (model=%s)", model)
+        response = await claude.run(prompt)
+
+        if response.is_error:
+            return AgentOutput(
+                result=None,
+                confidence=0.0,
+                quality=Quality.ERROR,
+                mistakes=[MistakeRecord(
+                    step_id=agent_input.step.id if agent_input.step else "unknown",
+                    type=MistakeType.TOOL_FAILURE,
+                    description=f"Claude Code CLI error: {response.text[:200]}",
+                    correction="Check that `claude` is installed and working.",
+                    learned="Verify Claude Code CLI is available before running AI agent.",
+                )],
+            )
+
+        result_text = response.text
 
         # 6. Self-evaluate for hallucination signals
         quality, mistakes = self._evaluate_output(
@@ -89,7 +97,7 @@ class AIAgent(BaseAgent):
         result_page = PageIndex(
             type=PageType.TOOL_RESULT,
             summary=f"AI response: {sanitized_intent[:60]}",
-            token_count=response.usage.output_tokens,
+            token_count=len(result_text) // 4,
             tags=[f"agent:{self.name}"],
             content=result_text,
         )
@@ -106,38 +114,37 @@ class AIAgent(BaseAgent):
 
     def _sanitize_intent(self, raw_intent: str) -> str:
         """Strip injection patterns and normalize the intent."""
-        # Remove common injection markers
         sanitized = raw_intent.strip()
         for marker in ["IGNORE PREVIOUS", "SYSTEM:", "ADMIN:", "```"]:
             sanitized = sanitized.replace(marker, "")
         return sanitized
 
-    def _select_model(self, intent: str) -> tuple[str, int, float]:
+    def _select_model(self, intent: str) -> str:
         """
         Choose model tier based on task complexity.
-        Returns (model, max_tokens, temperature).
+        Returns a Claude Code model name (haiku, sonnet, opus).
         """
         intent_lower = intent.lower()
 
-        # Simple lookups / classification → Haiku (fast)
+        # Simple lookups / classification → haiku (fast)
         fast_signals = ["classify", "label", "extract", "summarize briefly", "yes or no"]
         if any(sig in intent_lower for sig in fast_signals):
-            return MODEL_FAST, FAST_MAX_TOKENS, 0.1
+            return MODEL_FAST
 
-        # Complex reasoning / analysis → Sonnet
+        # Complex reasoning / analysis → sonnet
         reason_signals = ["analyze", "compare", "explain", "design", "plan", "evaluate"]
         if any(sig in intent_lower for sig in reason_signals):
-            return MODEL_REASON, DEFAULT_MAX_TOKENS, 0.3
+            return MODEL_REASON
 
-        # Default to the configured model
-        return self._default_model, DEFAULT_MAX_TOKENS, 0.2
+        # Default
+        return self._claude.model
 
     def _build_context(self, pages: list[PageIndex]) -> str:
         """Serialize relevant pages into a context block."""
         if not pages:
             return ""
         parts = []
-        for p in pages[:10]:  # limit to 10 pages
+        for p in pages[:10]:
             parts.append(f"[{p.type.value}] {p.summary}\n{p.content[:2000]}")
         return "\n---\n".join(parts)
 
@@ -165,7 +172,6 @@ class AIAgent(BaseAgent):
         # Check for contradiction with RAG pages
         rag_content = " ".join(p.content.lower() for p in rag_pages if p.type == PageType.RAG)
         if rag_content:
-            # Simple heuristic: if response makes a strong claim not in RAG, flag it
             strong_claims = [
                 line
                 for line in text.split(".")
@@ -197,6 +203,6 @@ class AIAgent(BaseAgent):
                     correction="Consider requesting specific sources.",
                     learned="Flag vague citations that lack specific references.",
                 ))
-                break  # one warning is enough
+                break
 
         return quality, mistakes

@@ -41,3 +41,7 @@ htmlcov/
 
 # ── OS ───────────────────────────────────────────────────────────────
 Thumbs.db
+
+# Cortex local files
+.cortex/settings.local.json
+.cortex/agent-memory-local/

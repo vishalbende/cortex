@@ -47,12 +47,10 @@ def _setup_logging(verbose: bool = False) -> None:
 # ── Engine factory ───────────────────────────────────────────────────
 
 def _build_engine(args: argparse.Namespace) -> CortexEngine:
-    api_key = getattr(args, "api_key", "") or os.environ.get("ANTHROPIC_API_KEY", "")
-    model = getattr(args, "model", "claude-sonnet-4-6")
+    model = getattr(args, "model", "sonnet")
     use_tmux = getattr(args, "tmux", False)
 
     config = CortexConfig(
-        anthropic_api_key=api_key,
         default_model=model,
         use_tmux=use_tmux,
     )
@@ -97,7 +95,8 @@ async def _cmd_interactive(args: argparse.Namespace) -> None:
 
         if not intent:
             continue
-        if intent == "/quit":
+        if intent in ("/quit", "quit", "exit", "/exit", "q"):
+            print("Goodbye.")
             break
         elif intent == "/status":
             print(json.dumps(engine.status(), indent=2))
@@ -135,18 +134,16 @@ def _cmd_tui(engine_or_args, intent: str | None = None) -> None:
     else:
         engine = engine_or_args
 
-    tui_app = CortexTUI()
+    tui_app = CortexTUI(engine=engine)
 
     if intent:
-        async def _run_intent():
-            tui_app.log_output(f"[bold]Intent:[/bold] {intent}")
-            result = await engine.run(intent)
-            tui_app.update_pages([p.to_dict() for p in engine.page_store.all_pages()])
-            tui_app.update_mistakes([m.to_dict() for m in engine.mistakes.all])
-            if result.get("result"):
-                tui_app.log_output(f"[green]Result:[/green] {str(result['result'])[:200]}")
+        # Pre-fill the input so it runs through the normal worker path
+        def _queue_intent():
+            input_widget = tui_app.query_one("#intent-input")
+            input_widget.value = intent
+            input_widget.action_submit()
 
-        tui_app.call_later(_run_intent)
+        tui_app.call_after_refresh(_queue_intent)
 
     tui_app.run()
 
@@ -201,13 +198,16 @@ def _cmd_setup(args: argparse.Namespace) -> None:
         summary = init.run()
         print(f"  ✓  Scaffolded .cortex/ ({len(summary['created'])} files)")
 
-    # 2. Check API key
-    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
-    if api_key:
-        print(f"  ✓  ANTHROPIC_API_KEY set ({api_key[:7]}...)")
+    # 2. Check Claude Code CLI
+    from cortex.claude_code import ClaudeCode
+
+    if ClaudeCode.is_installed():
+        ver = ClaudeCode.version()
+        print(f"  ✓  Claude Code CLI found ({ver})")
     else:
-        print("  ⚠  ANTHROPIC_API_KEY not set — AI agent will be disabled")
-        print("     Fix: export ANTHROPIC_API_KEY=sk-ant-...")
+        print("  ⚠  Claude Code CLI (`claude`) not found on PATH")
+        print("     Install: npm install -g @anthropic-ai/claude-code")
+        print("     Docs:    https://docs.anthropic.com/en/docs/claude-code")
 
     # 3. Print summary
     print()
@@ -276,6 +276,120 @@ def _cmd_init(args: argparse.Namespace) -> None:
     print()
 
 
+def _cmd_sessions(args: argparse.Namespace) -> None:
+    """List all saved sessions."""
+    from cortex.sessions.manager import SessionManager
+    from cortex.sessions.model import SessionStatus
+
+    mgr = SessionManager()
+    status_filter = None
+    if hasattr(args, "filter") and args.filter:
+        try:
+            status_filter = SessionStatus(args.filter)
+        except ValueError:
+            print(f"Unknown status: {args.filter}")
+            return
+
+    limit = getattr(args, "limit", 20)
+    entries = mgr.list_sessions(status=status_filter, limit=limit)
+
+    if not entries:
+        print("No sessions found.")
+        return
+
+    status_icons = {
+        "active": "⟳", "completed": "✓", "failed": "✗",
+        "cancelled": "–", "paused": "⏸",
+    }
+
+    print(f"Sessions ({len(entries)}):\n")
+    for e in entries:
+        icon = status_icons.get(e.get("status", ""), "?")
+        sid = e.get("id", "?")[:12]
+        intent = e.get("intent", "")[:50]
+        status = e.get("status", "?")
+        steps = e.get("step_count", 0)
+        done = e.get("completed_steps", 0)
+        created = e.get("created_at", "")[:19].replace("T", " ")
+        print(f"  {icon} {sid}  {status:<10}  {done}/{steps} steps  {created}")
+        print(f"    {intent}")
+        print()
+
+
+async def _cmd_resume(args: argparse.Namespace) -> None:
+    """Resume a previous session."""
+    engine = _build_engine(args)
+    session_id = args.session_id
+
+    # Support "latest" shorthand
+    if session_id == "latest":
+        latest = engine.session_manager.get_latest()
+        if not latest:
+            print("No sessions found.")
+            return
+        session_id = latest.id
+
+    print(f"Resuming session: {session_id}")
+    try:
+        result = await engine.resume(session_id)
+        print(json.dumps(result, indent=2, default=str))
+    except ValueError as e:
+        print(f"Error: {e}")
+
+
+def _cmd_session_show(args: argparse.Namespace) -> None:
+    """Show details of a specific session."""
+    from cortex.sessions.manager import SessionManager
+
+    mgr = SessionManager()
+    session = mgr.load(args.session_id)
+
+    if not session:
+        print(f"Session not found: {args.session_id}")
+        return
+
+    print(f"Session: {session.id}")
+    print(f"Intent:  {session.intent}")
+    print(f"Status:  {session.status.value}")
+    print(f"Model:   {session.model}")
+    print(f"Created: {session.created_at[:19].replace('T', ' ')}")
+    print(f"Updated: {session.updated_at[:19].replace('T', ' ')}")
+    print(f"Steps:   {session.completed_steps}/{session.step_count}")
+    print(f"Pages:   {len(session.pages)}")
+    print(f"Mistakes:{len(session.mistakes)}")
+    print()
+
+    if session.plan_steps:
+        print("Plan:")
+        for s in session.plan_steps:
+            icon = {"done": "✓", "failed": "✗", "running": "⟳", "pending": "○"}.get(
+                s.get("status", ""), "?"
+            )
+            print(f"  {icon} {s.get('id', '?')} [{s.get('agent', '')}] {s.get('action', '')[:50]}")
+        print()
+
+    if session.events:
+        print("Timeline:")
+        for ev in session.events[-10:]:
+            ts = ev.timestamp[:19].replace("T", " ") if ev.timestamp else ""
+            print(f"  {ts}  {ev.type}  {json.dumps(ev.data)[:60] if ev.data else ''}")
+        print()
+
+    if session.result:
+        print(f"Result: {str(session.result)[:200]}")
+
+
+def _cmd_session_delete(args: argparse.Namespace) -> None:
+    """Delete a session."""
+    from cortex.sessions.manager import SessionManager
+
+    mgr = SessionManager()
+    if mgr.delete(args.session_id):
+        print(f"Deleted session: {args.session_id}")
+    else:
+        print(f"Session not found: {args.session_id}")
+
+
 def _cmd_tree(args: argparse.Namespace) -> None:
     """Show the .cortex/ directory tree."""
     from cortex.scaffold.init import CortexInit
@@ -315,8 +429,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     # Global flags
     root.add_argument("-v", "--verbose", action="store_true", help="Debug logging")
-    root.add_argument("--api-key", default="", help="Anthropic API key (or set ANTHROPIC_API_KEY)")
-    root.add_argument("--model", default="claude-sonnet-4-6", help="Default LLM model")
+    root.add_argument("--model", default="sonnet", help="Claude Code model (haiku, sonnet, opus)")
 
     subs = root.add_subparsers(dest="command", title="commands")
 
@@ -368,6 +481,28 @@ def _build_parser() -> argparse.ArgumentParser:
     p_tree = subs.add_parser("tree", help="Show the .cortex/ directory tree")
     p_tree.add_argument("dir", nargs="?", default=".", help="Target directory (default: current)")
     p_tree.set_defaults(func=_cmd_tree, is_async=False)
+
+    # ── cortex sessions ─────────────────────────────────────────────
+    p_sess = subs.add_parser("sessions", aliases=["ss"], help="List saved sessions")
+    p_sess.add_argument("--filter", choices=["active", "completed", "failed", "cancelled", "paused"],
+                        help="Filter by status")
+    p_sess.add_argument("--limit", type=int, default=20, help="Max sessions to show")
+    p_sess.set_defaults(func=_cmd_sessions, is_async=False)
+
+    # ── cortex resume ────────────────────────────────────────────────
+    p_resume = subs.add_parser("resume", help="Resume a previous session")
+    p_resume.add_argument("session_id", help="Session ID to resume, or 'latest'")
+    p_resume.set_defaults(func=_cmd_resume, is_async=True)
+
+    # ── cortex session show ──────────────────────────────────────────
+    p_show = subs.add_parser("session-show", aliases=["show"], help="Show session details")
+    p_show.add_argument("session_id", help="Session ID to inspect")
+    p_show.set_defaults(func=_cmd_session_show, is_async=False)
+
+    # ── cortex session delete ────────────────────────────────────────
+    p_sdel = subs.add_parser("session-delete", help="Delete a saved session")
+    p_sdel.add_argument("session_id", help="Session ID to delete")
+    p_sdel.set_defaults(func=_cmd_session_delete, is_async=False)
 
     # ── cortex agents ────────────────────────────────────────────────
     p_agents = subs.add_parser("agents", help="List registered agents")

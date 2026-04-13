@@ -1,9 +1,8 @@
 """
 Cortex configuration — centralises all tunables.
 
+Cortex runs on the local Claude Code CLI. No API keys needed.
 All dependencies are injected at runtime (Dependency Inversion Principle).
-This module provides the default configuration and a factory for building
-the full Cortex stack from environment variables.
 """
 
 from __future__ import annotations
@@ -16,11 +15,8 @@ from dataclasses import dataclass, field
 class CortexConfig:
     """Top-level configuration for a Cortex session."""
 
-    # ── API ──────────────────────────────────────────────────────────
-    anthropic_api_key: str = field(
-        default_factory=lambda: os.environ.get("ANTHROPIC_API_KEY", "")
-    )
-    default_model: str = "claude-sonnet-4-6"
+    # ── Claude Code ──────────────────────────────────────────────────
+    default_model: str = "sonnet"  # claude CLI model names: haiku, sonnet, opus
 
     # ── Context ──────────────────────────────────────────────────────
     max_context_tokens: int = 80_000
@@ -48,11 +44,20 @@ class CortexConfig:
         default_factory=lambda: os.environ.get("CORTEX_RAG_DIR", "/tmp/cortex_rag")
     )
 
+    # ── Sessions ─────────────────────────────────────────────────────
+    sessions_dir: str | None = None  # defaults to .cortex/sessions/
+
+    # ── Working directory ────────────────────────────────────────────
+    cwd: str = field(default_factory=os.getcwd)
+
     def validate(self) -> list[str]:
         """Return a list of configuration warnings."""
+        from cortex.claude_code import ClaudeCode
+
         warnings = []
-        if not self.anthropic_api_key:
+        if not ClaudeCode.is_installed():
             warnings.append(
-                "ANTHROPIC_API_KEY not set. AI agent and LLM planning will be disabled."
+                "Claude Code CLI (`claude`) not found on PATH. "
+                "Install it: https://docs.anthropic.com/en/docs/claude-code"
             )
         return warnings

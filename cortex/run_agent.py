@@ -2,10 +2,10 @@
 Standalone agent runner — executed inside a tmux pane.
 
 Usage (called by TmuxRunner):
-  python -m cortex.run_agent <agent_name> --task "Do something" [--api-key KEY]
+  python -m cortex.run_agent <agent_name> --task "Do something"
 
 Each agent runs in its own process inside its own tmux pane, providing
-true parallelism and visual isolation.
+true parallelism and visual isolation. Uses the local Claude Code CLI.
 """
 
 from __future__ import annotations
@@ -24,14 +24,15 @@ logging.basicConfig(
 logger = logging.getLogger("cortex.runner")
 
 
-def build_agent(agent_name: str, api_key: str | None):
+def build_agent(agent_name: str):
     """Instantiate the requested agent."""
     if agent_name == "ai_agent":
         from cortex.agents.ai_agent import AIAgent
-        if not api_key:
-            logger.error("ai_agent requires ANTHROPIC_API_KEY")
+        from cortex.claude_code import ClaudeCode
+        if not ClaudeCode.is_installed():
+            logger.error("ai_agent requires Claude Code CLI (`claude`) on PATH")
             sys.exit(1)
-        return AIAgent(api_key=api_key)
+        return AIAgent()
 
     elif agent_name == "design_agent":
         from cortex.agents.design_agent import DesignAgent
@@ -50,14 +51,13 @@ async def main():
     parser = argparse.ArgumentParser(description="Cortex standalone agent runner")
     parser.add_argument("agent", help="Agent name (ai_agent, design_agent, test_writer_agent)")
     parser.add_argument("--task", required=True, help="The task/intent for the agent")
-    parser.add_argument("--api-key", default=os.environ.get("ANTHROPIC_API_KEY", ""))
     parser.add_argument("--constraints", default="{}", help="JSON constraints dict")
     parser.add_argument("--output", default=None, help="Output file path (JSON)")
     args = parser.parse_args()
 
     from cortex.models import AgentInput, PlanStep
 
-    agent = build_agent(args.agent, args.api_key)
+    agent = build_agent(args.agent)
     constraints = json.loads(args.constraints)
 
     step = PlanStep(id="standalone", agent=args.agent, action=args.task)

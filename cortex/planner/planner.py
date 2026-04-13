@@ -2,6 +2,9 @@
 Planner — decomposes user intents into dependency-ordered execution plans
 and drives step-by-step execution through the agent registry.
 
+Uses the local Claude Code CLI (`claude -p`) for plan decomposition.
+No API key needed.
+
 Planning rules (from Cortex spec):
   - Decompose every intent into atomic, dependency-ordered steps
   - Identify parallelizable steps and mark them with parallel=True
@@ -18,8 +21,7 @@ import json
 import logging
 from typing import Any, Callable, Awaitable
 
-import anthropic
-
+from cortex.claude_code import ClaudeCode
 from cortex.models import (
     AgentInput,
     AgentOutput,
@@ -42,9 +44,13 @@ logger = logging.getLogger(__name__)
 CONFIDENCE_THRESHOLD = 0.6
 
 # System prompt for LLM-based plan decomposition
+DECOMPOSITION_SYSTEM = """\
+You are the Cortex Planner. You decompose user intents into atomic,
+dependency-ordered execution plans. Return ONLY a valid JSON array of steps.
+No markdown fences, no explanation — just the JSON array."""
+
 DECOMPOSITION_PROMPT = """\
-You are the Cortex Planner. Given a user intent and a list of available agents,
-decompose the intent into atomic, dependency-ordered steps.
+Decompose this intent into steps for the available agents.
 
 Available agents: {agents}
 
@@ -53,16 +59,17 @@ Rules:
 - Mark steps that CAN run concurrently as parallel: true
 - Estimate your confidence (0.0-1.0) for each step
 - If a step requires output from a previous step, list it in depends_on
-- Return valid JSON array of steps only, no markdown fences
+- Return valid JSON array of steps only
 
-User intent: {intent}
-"""
+User intent: {intent}"""
 
 
 class Planner:
     """
     Core planner that decomposes intents into Plans and executes them
     step-by-step through registered agents.
+
+    Uses the local Claude Code CLI for LLM-based decomposition.
     """
 
     def __init__(
@@ -71,49 +78,48 @@ class Planner:
         page_store: PageStore,
         mistake_tracker: MistakeTracker,
         permissions: PermissionResolver,
-        api_key: str | None = None,
-        model: str = "claude-sonnet-4-6",
+        claude: ClaudeCode | None = None,
     ) -> None:
         self.registry = registry
         self.page_store = page_store
         self.mistakes = mistake_tracker
         self.permissions = permissions
-        self.model = model
-        self._client: anthropic.AsyncAnthropic | None = None
-        if api_key:
-            self._client = anthropic.AsyncAnthropic(api_key=api_key)
+        self._claude = claude
 
         # Callbacks the TUI / engine can hook into
         self.on_step_start: Callable[[PlanStep], Awaitable[None]] | None = None
         self.on_step_done: Callable[[PlanStep, AgentOutput], Awaitable[None]] | None = None
         self.on_replan: Callable[[Plan], Awaitable[None]] | None = None
 
+        # Live plan steps — updated during execution for TUI to read
+        self._current_plan_steps: list[PlanStep] = []
+
     # ── Plan decomposition ───────────────────────────────────────────
 
     async def decompose(self, intent: str) -> Plan:
         """
         Turn a user intent into a structured Plan.
-        Uses LLM if a client is available; otherwise uses a single-step fallback.
+        Uses Claude Code CLI if available; otherwise uses a single-step fallback.
         """
-        if self._client:
-            return await self._decompose_with_llm(intent)
+        if self._claude and ClaudeCode.is_installed():
+            return await self._decompose_with_claude(intent)
         return self._decompose_fallback(intent)
 
-    async def _decompose_with_llm(self, intent: str) -> Plan:
-        """Use Claude to decompose the intent into steps."""
+    async def _decompose_with_claude(self, intent: str) -> Plan:
+        """Use local Claude Code CLI to decompose the intent into steps."""
         agents_desc = ", ".join(
             f"{name}" for name in self.registry.list_agents()
         )
         prompt = DECOMPOSITION_PROMPT.format(agents=agents_desc, intent=intent)
 
         try:
-            response = await self._client.messages.create(
-                model=self.model,
-                max_tokens=2048,
-                temperature=0.2,
-                messages=[{"role": "user", "content": prompt}],
-            )
-            text = response.content[0].text.strip()
+            response = await self._claude.run(prompt, system_prompt=DECOMPOSITION_SYSTEM)
+
+            if response.is_error:
+                logger.warning("Claude Code decomposition failed: %s", response.text[:200])
+                return self._decompose_fallback(intent)
+
+            text = response.text.strip()
             # Strip markdown fences if present
             if text.startswith("```"):
                 text = text.split("\n", 1)[1].rsplit("```", 1)[0].strip()
@@ -134,11 +140,11 @@ class Planner:
                 steps.append(step)
 
             plan = Plan(intent=intent, steps=steps)
-            logger.info("Decomposed intent into %d steps", len(steps))
+            logger.info("Decomposed intent into %d steps via Claude Code", len(steps))
             return plan
 
         except Exception as e:
-            logger.warning("LLM decomposition failed: %s. Using fallback.", e)
+            logger.warning("Claude Code decomposition failed: %s. Using fallback.", e)
             return self._decompose_fallback(intent)
 
     def _decompose_fallback(self, intent: str) -> Plan:
@@ -164,6 +170,9 @@ class Planner:
         """
         outputs: list[AgentOutput] = []
         retries = 0
+
+        # Expose steps for live TUI access
+        self._current_plan_steps = plan.steps
 
         # Store plan as a context page
         plan_page = PageIndex(

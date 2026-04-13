@@ -8,7 +8,6 @@
 #   uv sync --dev        # include dev deps (pytest, mypy, ruff)
 #   uv tool install .    # install `cortex` as a global CLI command
 
-anthropic>=0.40.0
 textual>=0.80.0
 python-dotenv>=1.0.0
 
