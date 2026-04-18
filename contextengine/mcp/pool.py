@@ -2,22 +2,29 @@
 from __future__ import annotations
 
 from contextengine.mcp.connector import MCPConnector
+from contextengine.tokenize import CharEstimateTokenizer, Tokenizer
 from contextengine.types import MCPServer, Tool
 
 
 class MCPPool:
     """Owns the MCPConnector for each configured MCP server."""
 
-    def __init__(self, servers: list[MCPServer]) -> None:
+    def __init__(
+        self,
+        servers: list[MCPServer],
+        *,
+        tokenizer: Tokenizer | None = None,
+    ) -> None:
         names = [s.name for s in servers]
         if len(names) != len(set(names)):
             raise ValueError(f"Duplicate MCPServer names: {names}")
         self._servers = servers
+        self._tokenizer = tokenizer or CharEstimateTokenizer()
         self._connectors: dict[str, MCPConnector] = {}
 
     async def start(self) -> None:
         for s in self._servers:
-            c = MCPConnector(s)
+            c = MCPConnector(s, tokenizer=self._tokenizer)
             await c.connect()
             self._connectors[s.name] = c
 

@@ -70,14 +70,17 @@ def test_pack_respects_required_tools() -> None:
 
 
 def test_pack_history_newest_first() -> None:
-    history = [Message(role="user", content="old"), Message(role="user", content="newer")]
+    history = [
+        Message(role="user", content="a" * 40),
+        Message(role="user", content="b" * 20),
+    ]
     r = pack(
-        budget=Budget(total=20, reserved_output=0),
+        budget=Budget(total=10, reserved_output=0),
         system_tokens=0,
         memory_tokens=0,
         ranked_tools=[],
         history=history,
         tokenizer=CharEstimateTokenizer(),
     )
-    assert [m.content for m in r.messages] == ["newer"]
-    assert [m.content for m in r.messages_dropped] == ["old"]
+    assert [m.content for m in r.messages] == ["b" * 20]
+    assert [m.content for m in r.messages_dropped] == ["a" * 40]

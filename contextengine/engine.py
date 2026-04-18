@@ -46,7 +46,7 @@ class ContextEngine:
         self.tokenizer = tokenizer or get_tokenizer(model)
         self._client = anthropic_client
 
-        self._pool = MCPPool(mcps)
+        self._pool = MCPPool(mcps, tokenizer=self.tokenizer)
         self._catalog: Catalog | None = None
         self._router: Router | None = None
 
@@ -132,11 +132,31 @@ class ContextEngine:
     async def execute(self, tool_use: Any) -> Any:
         """Proxy a tool_use block from the model to the owning MCP server.
 
-        Stub at v1 — dispatches based on `tool_use.name` (namespaced
-        `<mcp>.<tool>`) to `MCPPool.get(mcp).call_tool(...)`.
+        Accepts either an Anthropic tool_use content block (object with
+        `.name` and `.input`) or a dict with the same keys. The tool
+        name is expected to be namespaced as `<mcp>.<tool>`.
         """
-        del tool_use
-        raise NotImplementedError("execute is stubbed — implement in next pass")
+        name = getattr(tool_use, "name", None)
+        if name is None and isinstance(tool_use, dict):
+            name = tool_use.get("name")
+        if not isinstance(name, str):
+            raise ValueError(f"tool_use is missing a string 'name': {tool_use!r}")
+
+        arguments = getattr(tool_use, "input", None)
+        if arguments is None and isinstance(tool_use, dict):
+            arguments = tool_use.get("input")
+        if arguments is None:
+            arguments = {}
+        if not isinstance(arguments, dict):
+            raise ValueError(f"tool_use 'input' must be a dict, got {type(arguments)}")
+
+        if "." not in name:
+            raise ValueError(
+                f"Tool name must be namespaced as '<mcp>.<tool>', got {name!r}"
+            )
+        mcp_name, tool_name = name.split(".", 1)
+        connector = self._pool.get(mcp_name)
+        return await connector.call_tool(tool_name, arguments)
 
     async def close(self) -> None:
         """Tear down MCP connections."""
