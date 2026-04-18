@@ -6,6 +6,7 @@ build-backend = "hatchling.build"
 name = "contextengine"
 version = "0.1.0"
 description = "MCP-aware context orchestration for LLM agents — budget-packed tool routing, entity memory, telemetry."
+readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
 authors = [{ name = "Vishal Bende" }]
