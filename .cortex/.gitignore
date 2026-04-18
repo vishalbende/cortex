@@ -1,4 +1,0 @@
-# Cortex local-only files (not committed)
-settings.local.json
-agent-memory-local/
-*.log
