@@ -19,6 +19,8 @@ from contextengine import ContextEngine, MCPServer
 
 async def main(message: str) -> None:
     home = os.path.expanduser("~")
+    from contextengine.telemetry import StdoutSink
+
     engine = ContextEngine(
         mcps=[
             MCPServer(
@@ -30,6 +32,7 @@ async def main(message: str) -> None:
         router_model="claude-haiku-4-5",
         budget=80_000,
         system_prompt="You are a concise assistant.",
+        telemetry_sinks=[StdoutSink()],
     )
 
     await engine.start()

@@ -94,3 +94,21 @@ class AssembleResult:
     tools: list[dict[str, Any]]
     messages: list[dict[str, Any]]
     stats: AssembleStats
+
+    def to_anthropic(self) -> dict[str, Any]:
+        """Return kwargs for `anthropic.messages.create(...)`."""
+        return {
+            "system": self.system,
+            "messages": self.messages,
+            "tools": self.tools,
+        }
+
+    def to_openai(self) -> dict[str, Any]:
+        """Return kwargs for OpenAI `chat.completions.create(...)`.
+
+        Messages and tools are transformed to the OpenAI shape. The system
+        prompt becomes a leading system message.
+        """
+        from contextengine.adapters.openai import assemble_to_openai
+
+        return assemble_to_openai(self)
