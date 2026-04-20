@@ -61,9 +61,10 @@ one optimization problem.
 ## Install
 
 ```bash
-pip install contextengine              # core
+pip install contextengine              # core (Anthropic router)
+pip install contextengine[openai]      # + GPT / o-series as router model
 pip install contextengine[tokenizer]   # + tiktoken for accurate counts
-pip install contextengine[dev]         # + pytest, mypy, ruff
+pip install contextengine[dev]         # + pytest, mypy, ruff, all extras
 ```
 
 ## 60-second example
@@ -132,6 +133,54 @@ await engine.close()
 | KV-cache-aware assembly | stable prefix (system + memory + tools) + `cache_control: ephemeral` on router prompts |
 | Permission-scoped memory views | `Fact.visibility` tuples — sales sees margins, support sees escalations |
 
+## Pick your router: Claude or GPT
+
+The internal LLM calls (routing, categorization, memory writeback,
+compaction) work with either provider — the engine auto-detects from
+the model string.
+
+```python
+# Claude everywhere (default)
+engine = ContextEngine(
+    mcps=[...],
+    model="claude-sonnet-4-5",
+    router_model="claude-haiku-4-5",
+)
+
+# GPT for routing + memory
+engine = ContextEngine(
+    mcps=[...],
+    model="gpt-4o",
+    router_model="gpt-4o-mini",
+)
+
+# Mixed — GPT router, Claude for memory writeback
+engine = ContextEngine(
+    mcps=[...],
+    model="claude-sonnet-4-5",
+    router_model="gpt-4o-mini",
+    memory_model="claude-haiku-4-5",
+)
+
+# Or bring your own client implementing LLMClient
+from contextengine import LLMClient, LLMResponse
+
+class MyCustomLLM:
+    async def complete(self, *, model, system, user, max_tokens, stable_prefix=None, json_mode=False):
+        ...
+        return LLMResponse(text=...)
+
+engine = ContextEngine(mcps=[...], model="...", llm_client=MyCustomLLM())
+```
+
+Both paths go through the same `LLMClient` interface:
+- `AnthropicClient` marks `stable_prefix` with `cache_control: ephemeral`
+  for explicit prompt caching.
+- `OpenAIClient` concatenates `stable_prefix` into the system message
+  so it sits in OpenAI's automatic prefix cache position.
+- `json_mode=True` enables structured-JSON output on OpenAI; Anthropic
+  relies on the catalog-prompt prefix + `extract_json` tolerance.
+
 ## Vectorless tool routing
 
 Instead of embedding every tool into a vector DB, contextengine builds a
@@ -152,7 +201,7 @@ catalog prefix.
 ```python
 engine = ContextEngine(
     mcps=[...],                    # list[MCPServer]
-    model="claude-sonnet-4-5",
+    model="claude-sonnet-4-5",     # your agent model (engine doesn't call it)
     router_model="claude-haiku-4-5",
     memory_model=None,             # defaults to router_model
     budget=80_000,
@@ -160,7 +209,9 @@ engine = ContextEngine(
     memory_budget=4_000,
     system_prompt="",
     cache_dir=".contextengine",    # catalog cache + memory (if JSONStore)
-    anthropic_client=None,         # optional — created on demand
+    anthropic_client=None,         # provider SDK override; auto when model starts with "claude"
+    openai_client=None,            # provider SDK override; auto when model starts with "gpt"/"o1"/"o3"/"o4"
+    llm_client=None,               # bring-your-own LLMClient — overrides both
     tokenizer=None,                # auto: tiktoken if available, else estimator
     memory_store=None,             # InMemoryStore by default
     telemetry_sinks=[],            # StdoutSink, FileSink, …
@@ -208,6 +259,11 @@ contextengine/
   budget.py              greedy token packer (tools prefix + newest history)
   compaction.py          rolling-summary compactor
   tokenize.py            tiktoken-backed + char-estimate fallback
+  llm/
+    base.py              LLMClient protocol + LLMResponse
+    anthropic.py         AnthropicClient (cache_control: ephemeral)
+    openai.py            OpenAIClient (response_format json_object, prefix cache)
+    registry.py          auto-detect provider from model string
   mcp/
     connector.py         stdio + SSE/HTTP via official `mcp` SDK
     pool.py              lifecycle + duplicate-name guard

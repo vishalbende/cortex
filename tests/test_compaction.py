@@ -2,7 +2,7 @@ import pytest
 
 from contextengine.compaction import HistoryCompactor
 from contextengine.types import Message
-from tests.fakes import FakeAnthropicClient
+from tests.fakes import FakeLLMClient
 
 
 def _make_history(n: int) -> list[Message]:
@@ -14,16 +14,14 @@ def _make_history(n: int) -> list[Message]:
 
 
 def test_should_compact_threshold() -> None:
-    c = HistoryCompactor(model="m", threshold=5, keep_recent=2)
+    c = HistoryCompactor(model="m", llm=FakeLLMClient(), threshold=5, keep_recent=2)
     assert not c.should_compact(_make_history(5))
     assert c.should_compact(_make_history(6))
 
 
 async def test_compact_summarizes_prefix_and_keeps_recent() -> None:
-    client = FakeAnthropicClient(responses=["Prior conversation discussed onboarding."])
-    c = HistoryCompactor(
-        model="m", threshold=4, keep_recent=2, anthropic_client=client
-    )
+    llm = FakeLLMClient(responses=["Prior conversation discussed onboarding."])
+    c = HistoryCompactor(model="m", llm=llm, threshold=4, keep_recent=2)
     hist = _make_history(10)
     out = await c.compact(hist)
     assert len(out) == 3
@@ -34,17 +32,15 @@ async def test_compact_summarizes_prefix_and_keeps_recent() -> None:
 
 
 async def test_compact_noop_below_threshold() -> None:
-    c = HistoryCompactor(model="m", threshold=100)
+    c = HistoryCompactor(model="m", llm=FakeLLMClient(), threshold=100)
     hist = _make_history(5)
     out = await c.compact(hist)
     assert out is hist
 
 
 async def test_compact_extends_existing_summary() -> None:
-    client = FakeAnthropicClient(responses=["Extended rolling summary."])
-    c = HistoryCompactor(
-        model="m", threshold=4, keep_recent=2, anthropic_client=client
-    )
+    llm = FakeLLMClient(responses=["Extended rolling summary."])
+    c = HistoryCompactor(model="m", llm=llm, threshold=4, keep_recent=2)
     hist: list[Message] = [
         Message(role="user", content=f"{HistoryCompactor.SENTINEL} prior rolling summary"),
         *_make_history(8),
@@ -52,5 +48,4 @@ async def test_compact_extends_existing_summary() -> None:
     out = await c.compact(hist)
     assert out[0].content.startswith(HistoryCompactor.SENTINEL)
     assert "Extended" in str(out[0].content)
-    prompt = client.messages.calls[0]["messages"][0]["content"]
-    assert "prior rolling summary" in prompt
+    assert "prior rolling summary" in llm.calls[0]["user"]

@@ -10,7 +10,7 @@ from contextengine.catalog import (
     save_catalog,
 )
 from contextengine.types import Catalog, MCPCatalog, Tool, ToolCategory
-from tests.fakes import FakeAnthropicClient
+from tests.fakes import FakeLLMClient
 
 
 def test_version_hash_is_order_independent() -> None:
@@ -70,7 +70,7 @@ async def test_build_catalog_calls_llm_per_mcp(tmp_path: Path) -> None:
             Tool(name="linear.list_issues", mcp="linear", description="list issues", input_schema={}),
         ]
     }
-    client = FakeAnthropicClient(
+    llm = FakeLLMClient(
         responses=[
             json.dumps(
                 {
@@ -89,7 +89,7 @@ async def test_build_catalog_calls_llm_per_mcp(tmp_path: Path) -> None:
     catalog = await build_catalog(
         tools_by_mcp=tools,
         router_model="haiku",
-        anthropic_client=client,
+        llm=llm,
         cache_dir=tmp_path,
     )
     assert len(catalog.mcps) == 1
@@ -107,7 +107,7 @@ async def test_build_catalog_calls_llm_per_mcp(tmp_path: Path) -> None:
 
 async def test_build_catalog_uses_cache(tmp_path: Path) -> None:
     tools = {"x": [Tool(name="x.a", mcp="x", description="d", input_schema={})]}
-    client = FakeAnthropicClient(
+    llm = FakeLLMClient(
         responses=[
             json.dumps(
                 {"summary": "X.", "categories": [{"name": "g", "summary": "", "tool_names": ["a"]}]}
@@ -115,14 +115,14 @@ async def test_build_catalog_uses_cache(tmp_path: Path) -> None:
         ]
     )
     c1 = await build_catalog(
-        tools_by_mcp=tools, router_model="haiku", anthropic_client=client, cache_dir=tmp_path
+        tools_by_mcp=tools, router_model="haiku", llm=llm, cache_dir=tmp_path
     )
-    assert len(client.messages.calls) == 1
+    assert len(llm.calls) == 1
 
     c2 = await build_catalog(
         tools_by_mcp=tools,
         router_model="haiku",
-        anthropic_client=FakeAnthropicClient(responses=[]),
+        llm=FakeLLMClient(responses=[]),
         cache_dir=tmp_path,
     )
     assert c2 == c1
@@ -135,7 +135,7 @@ async def test_build_catalog_catches_leftover_tools(tmp_path: Path) -> None:
             Tool(name="linear.b", mcp="linear", description="d", input_schema={}),
         ]
     }
-    client = FakeAnthropicClient(
+    llm = FakeLLMClient(
         responses=[
             json.dumps(
                 {
@@ -146,7 +146,7 @@ async def test_build_catalog_catches_leftover_tools(tmp_path: Path) -> None:
         ]
     )
     catalog = await build_catalog(
-        tools_by_mcp=tools, router_model="haiku", anthropic_client=client, cache_dir=tmp_path
+        tools_by_mcp=tools, router_model="haiku", llm=llm, cache_dir=tmp_path
     )
     cat_names = [c.name for c in catalog.mcps[0].categories]
     assert "other" in cat_names

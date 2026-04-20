@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from contextengine._json import extract_json
+from contextengine.llm.base import LLMClient
 from contextengine.memory.store import MemoryStore
 from contextengine.memory.types import Event, Fact
 
@@ -21,14 +22,9 @@ class MemoryWriter:
     """Extracts durable facts and timeline events from a completed turn.
 
     Uses a cheap LLM (same model class as the router) to read the
-    assistant's response and tool results, then emit structured updates
-    to the store. Intended to be called async/non-blocking after each
-    turn via `ContextEngine.process_turn(...)`.
-
-    Extraction prompt:
-        "You are a memory writer. Read the turn and return JSON with two
-        arrays: facts (entity-scoped key/value that is durably true now)
-        and events (one-sentence descriptions of what happened this turn)."
+    assistant's response and tool results, then emits structured updates
+    to the store. Provider-agnostic via LLMClient — works with either
+    Claude or GPT models.
     """
 
     def __init__(
@@ -36,18 +32,11 @@ class MemoryWriter:
         *,
         store: MemoryStore,
         model: str,
-        anthropic_client: Any = None,
+        llm: LLMClient,
     ) -> None:
         self.store = store
         self.model = model
-        self._client = anthropic_client
-
-    async def _client_instance(self) -> Any:
-        if self._client is None:
-            import anthropic
-
-            self._client = anthropic.AsyncAnthropic()
-        return self._client
+        self._llm = llm
 
     async def write(
         self,
@@ -77,13 +66,14 @@ class MemoryWriter:
             f"Return ONLY the JSON, no preamble."
         )
 
-        client = await self._client_instance()
-        response = await client.messages.create(
+        response = await self._llm.complete(
             model=self.model,
+            system="",
+            user=prompt,
             max_tokens=1024,
-            messages=[{"role": "user", "content": prompt}],
+            json_mode=True,
         )
-        data = extract_json(response.content[0].text)
+        data = extract_json(response.text)
 
         now = time.time()
         visibility = (role,) if role else ()

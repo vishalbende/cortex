@@ -9,10 +9,10 @@ from contextengine.memory import Fact
 from contextengine.router import Router
 from contextengine.telemetry import StdoutSink
 from contextengine.types import Catalog, MCPCatalog, Message, Tool, ToolCategory
-from tests.fakes import FakeAnthropicClient
+from tests.fakes import FakeLLMClient
 
 
-def _seed_catalog(engine: ContextEngine, client: FakeAnthropicClient) -> None:
+def _seed_catalog(engine: ContextEngine, llm: FakeLLMClient) -> None:
     linear = MCPCatalog(
         name="linear",
         summary="Linear.",
@@ -34,9 +34,7 @@ def _seed_catalog(engine: ContextEngine, client: FakeAnthropicClient) -> None:
     )
     catalog = Catalog(mcps=(linear,), version_hash="v1")
     engine._catalog = catalog
-    engine._router = Router(
-        catalog=catalog, router_model=engine.router_model, anthropic_client=client
-    )
+    engine._router = Router(catalog=catalog, router_model=engine.router_model, llm=llm)
 
 
 async def test_assemble_injects_memory_block_for_entity() -> None:
@@ -47,8 +45,8 @@ async def test_assemble_injects_memory_block_for_entity() -> None:
     )
     await engine.memory.upsert_fact(Fact(entity_id="c1", key="tier", value="pro"))
 
-    client = FakeAnthropicClient(responses=[json.dumps({"tools": ["linear.create_issue"]})])
-    _seed_catalog(engine, client)
+    llm = FakeLLMClient(responses=[json.dumps({"tools": ["linear.create_issue"]})])
+    _seed_catalog(engine, llm)
 
     result = await engine.assemble(message="make an issue", entity_id="c1")
     assert "agent." in result.system
@@ -63,8 +61,8 @@ async def test_telemetry_sink_receives_record() -> None:
         model="claude-sonnet-4-5",
         telemetry_sinks=[StdoutSink(stream=buf)],
     )
-    client = FakeAnthropicClient(responses=[json.dumps({"tools": ["linear.create_issue"]})])
-    _seed_catalog(engine, client)
+    llm = FakeLLMClient(responses=[json.dumps({"tools": ["linear.create_issue"]})])
+    _seed_catalog(engine, llm)
 
     await engine.assemble(message="hi")
     output = buf.getvalue()
@@ -73,7 +71,7 @@ async def test_telemetry_sink_receives_record() -> None:
 
 
 async def test_compaction_triggered_on_long_history() -> None:
-    client = FakeAnthropicClient(
+    shared_llm = FakeLLMClient(
         responses=[
             "Summary of prior conversation.",
             json.dumps({"tools": ["linear.create_issue"]}),
@@ -84,9 +82,9 @@ async def test_compaction_triggered_on_long_history() -> None:
         model="claude-sonnet-4-5",
         compaction_threshold=4,
         compaction_keep_recent=2,
-        anthropic_client=client,
+        llm_client=shared_llm,
     )
-    _seed_catalog(engine, client)
+    _seed_catalog(engine, shared_llm)
 
     history = [Message(role="user", content=f"t{i}") for i in range(10)]
     result = await engine.assemble(message="now", history=history)
@@ -104,13 +102,13 @@ async def test_role_scoping_filters_memory() -> None:
     )
     await engine.memory.upsert_fact(Fact(entity_id="c1", key="tier", value="pro"))
 
-    client = FakeAnthropicClient(
+    llm = FakeLLMClient(
         responses=[
             json.dumps({"tools": ["linear.create_issue"]}),
             json.dumps({"tools": ["linear.create_issue"]}),
         ]
     )
-    _seed_catalog(engine, client)
+    _seed_catalog(engine, llm)
 
     sales = await engine.assemble(message="q", entity_id="c1", role="sales")
     support = await engine.assemble(message="q", entity_id="c1", role="support")

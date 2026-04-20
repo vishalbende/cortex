@@ -1,6 +1,7 @@
 """contextengine — MCP-aware context orchestration for LLM agents."""
 
 from contextengine.engine import ContextEngine
+from contextengine.llm import AnthropicClient, LLMClient, LLMResponse, OpenAIClient
 from contextengine.memory import (
     EntityMemory,
     Event,
@@ -26,6 +27,10 @@ from contextengine.types import (
 
 __all__ = [
     "ContextEngine",
+    "LLMClient",
+    "LLMResponse",
+    "AnthropicClient",
+    "OpenAIClient",
     "MCPServer",
     "Tool",
     "ToolCategory",

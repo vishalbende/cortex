@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from contextengine._json import extract_json
+from contextengine.llm.base import LLMClient
 from contextengine.types import Catalog, MCPCatalog, Tool, ToolCategory
 
 _CATALOG_SUBDIR = "catalogs"
@@ -23,7 +24,7 @@ async def build_catalog(
     *,
     tools_by_mcp: dict[str, list[Tool]],
     router_model: str,
-    anthropic_client: Any = None,
+    llm: LLMClient,
     cache_dir: Path | None = None,
 ) -> Catalog:
     """Build (or load from cache) the hierarchical MCP → category → tools catalog."""
@@ -35,12 +36,6 @@ async def build_catalog(
         if cached is not None:
             return cached
 
-    client = anthropic_client
-    if client is None:
-        import anthropic
-
-        client = anthropic.AsyncAnthropic()
-
     mcps: list[MCPCatalog] = []
     for mcp_name, tools in tools_by_mcp.items():
         if not tools:
@@ -49,7 +44,7 @@ async def build_catalog(
         categories, summary = await _categorize_mcp(
             mcp_name=mcp_name,
             tools=tools,
-            client=client,
+            llm=llm,
             model=router_model,
         )
         mcps.append(
@@ -70,7 +65,7 @@ async def _categorize_mcp(
     *,
     mcp_name: str,
     tools: list[Tool],
-    client: Any,
+    llm: LLMClient,
     model: str,
 ) -> tuple[list[ToolCategory], str]:
     tool_lines = "\n".join(
@@ -88,13 +83,14 @@ async def _categorize_mcp(
         f"Return ONLY the JSON object, no preamble."
     )
 
-    response = await client.messages.create(
+    response = await llm.complete(
         model=model,
+        system="",
+        user=user_prompt,
         max_tokens=2048,
-        messages=[{"role": "user", "content": user_prompt}],
+        json_mode=True,
     )
-    text = response.content[0].text
-    data = extract_json(text)
+    data = extract_json(response.text)
 
     summary: str = data.get("summary", "")
     raw_categories = data.get("categories", [])
@@ -131,7 +127,6 @@ async def _categorize_mcp(
 
 
 def save_catalog(catalog: Catalog, cache_dir: Path) -> Path:
-    """Persist catalog JSON at `cache_dir/catalogs/{version_hash}.json`."""
     target = Path(cache_dir) / _CATALOG_SUBDIR
     target.mkdir(parents=True, exist_ok=True)
     path = target / f"{catalog.version_hash}.json"

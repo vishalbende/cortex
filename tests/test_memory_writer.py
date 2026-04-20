@@ -3,12 +3,12 @@ import json
 import pytest
 
 from contextengine.memory import InMemoryStore, MemoryWriter
-from tests.fakes import FakeAnthropicClient
+from tests.fakes import FakeLLMClient
 
 
 async def test_writer_upserts_facts_and_appends_events() -> None:
     store = InMemoryStore()
-    client = FakeAnthropicClient(
+    llm = FakeLLMClient(
         responses=[
             json.dumps(
                 {
@@ -23,7 +23,7 @@ async def test_writer_upserts_facts_and_appends_events() -> None:
             )
         ]
     )
-    writer = MemoryWriter(store=store, model="haiku", anthropic_client=client)
+    writer = MemoryWriter(store=store, model="haiku", llm=llm)
     result = await writer.write(
         entity_id="c1",
         user_message="upgrade me",
@@ -39,7 +39,7 @@ async def test_writer_upserts_facts_and_appends_events() -> None:
 
 async def test_writer_applies_role_visibility() -> None:
     store = InMemoryStore()
-    client = FakeAnthropicClient(
+    llm = FakeLLMClient(
         responses=[
             json.dumps(
                 {
@@ -49,7 +49,7 @@ async def test_writer_applies_role_visibility() -> None:
             )
         ]
     )
-    writer = MemoryWriter(store=store, model="haiku", anthropic_client=client)
+    writer = MemoryWriter(store=store, model="haiku", llm=llm)
     await writer.write(
         entity_id="c1",
         user_message="u",
@@ -63,7 +63,7 @@ async def test_writer_applies_role_visibility() -> None:
 
 async def test_writer_skips_malformed_entries() -> None:
     store = InMemoryStore()
-    client = FakeAnthropicClient(
+    llm = FakeLLMClient(
         responses=[
             json.dumps(
                 {
@@ -77,7 +77,7 @@ async def test_writer_skips_malformed_entries() -> None:
             )
         ]
     )
-    writer = MemoryWriter(store=store, model="haiku", anthropic_client=client)
+    writer = MemoryWriter(store=store, model="haiku", llm=llm)
     result = await writer.write(
         entity_id="c1",
         user_message="u",

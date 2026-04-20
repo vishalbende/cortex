@@ -2,8 +2,8 @@
 from __future__ import annotations
 
 import json
-from typing import Any
 
+from contextengine.llm.base import LLMClient
 from contextengine.types import Message
 
 
@@ -16,7 +16,7 @@ class HistoryCompactor:
       - Replace the prefix with a single Message(role="user", content="<summary>")
         marked with a sentinel so future compactions can re-compact cleanly.
 
-    Triggered when `len(history) > threshold`.
+    Triggered when `len(history) > threshold`. Provider-agnostic.
     """
 
     SENTINEL = "<compacted-summary>"
@@ -25,21 +25,14 @@ class HistoryCompactor:
         self,
         *,
         model: str,
+        llm: LLMClient,
         threshold: int = 40,
         keep_recent: int = 10,
-        anthropic_client: Any = None,
     ) -> None:
         self.model = model
         self.threshold = threshold
         self.keep_recent = keep_recent
-        self._client = anthropic_client
-
-    async def _client_instance(self) -> Any:
-        if self._client is None:
-            import anthropic
-
-            self._client = anthropic.AsyncAnthropic()
-        return self._client
+        self._llm = llm
 
     def should_compact(self, history: list[Message]) -> bool:
         return len(history) > self.threshold
@@ -77,13 +70,13 @@ class HistoryCompactor:
             f"Transcript:\n{transcript}"
         )
 
-        client = await self._client_instance()
-        response = await client.messages.create(
+        response = await self._llm.complete(
             model=self.model,
+            system="",
+            user=prompt,
             max_tokens=512,
-            messages=[{"role": "user", "content": prompt}],
         )
-        summary = response.content[0].text.strip()
+        summary = response.text.strip()
 
         summary_turn = Message(role="user", content=f"{self.SENTINEL} {summary}")
         return [summary_turn, *recent]

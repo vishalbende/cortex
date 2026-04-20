@@ -1,6 +1,7 @@
 import pytest
 
 from contextengine import ContextEngine, MCPServer
+from contextengine.llm import AnthropicClient, OpenAIClient
 
 
 def test_engine_requires_mcps() -> None:
@@ -80,6 +81,36 @@ async def test_execute_rejects_unknown_mcp() -> None:
     )
     with pytest.raises(KeyError, match="Unknown MCP"):
         await e.execute({"name": "github.create_pr", "input": {}})
+
+
+def test_engine_selects_openai_client_for_gpt_router() -> None:
+    e = ContextEngine(
+        mcps=[MCPServer(name="linear", command=["x"])],
+        model="gpt-4o",
+        router_model="gpt-4o-mini",
+    )
+    assert isinstance(e._router_llm, OpenAIClient)
+    assert isinstance(e._memory_llm, OpenAIClient)
+
+
+def test_engine_selects_anthropic_client_for_claude_router() -> None:
+    e = ContextEngine(
+        mcps=[MCPServer(name="linear", command=["x"])],
+        model="claude-sonnet-4-5",
+        router_model="claude-haiku-4-5",
+    )
+    assert isinstance(e._router_llm, AnthropicClient)
+
+
+def test_engine_mixed_providers() -> None:
+    e = ContextEngine(
+        mcps=[MCPServer(name="linear", command=["x"])],
+        model="claude-sonnet-4-5",
+        router_model="gpt-4o-mini",
+        memory_model="claude-haiku-4-5",
+    )
+    assert isinstance(e._router_llm, OpenAIClient)
+    assert isinstance(e._memory_llm, AnthropicClient)
 
 
 async def test_execute_accepts_object_form() -> None:
