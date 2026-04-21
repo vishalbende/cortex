@@ -1,5 +1,6 @@
 """contextengine — MCP-aware context orchestration for LLM agents."""
 
+from contextengine.server import ContextEngineMCPServer, build_server
 from contextengine.coordination import (
     AgentView,
     Handoff,
@@ -9,13 +10,16 @@ from contextengine.coordination import (
 from contextengine.engine import ContextEngine
 from contextengine.llm import AnthropicClient, LLMClient, LLMResponse, OpenAIClient
 from contextengine.memory import (
+    SUMMARY_KEY,
     AllowAllPolicy,
+    CompactResult,
     EntityMemory,
     Event,
     Fact,
     InMemoryStore,
     JSONStore,
     MemoryAssembler,
+    MemoryCompactor,
     MemoryQuery,
     MemoryStore,
     MemoryWriter,
@@ -34,6 +38,7 @@ from contextengine.streaming import (
 from contextengine.telemetry import FileSink, Sink, StdoutSink, TraceRecord, TraceRecorder
 from contextengine.tokenize import (
     AnthropicTokenizer,
+    AsyncAnthropicTokenizer,
     CharEstimateTokenizer,
     TiktokenTokenizer,
     Tokenizer,
@@ -52,6 +57,8 @@ from contextengine.types import (
 
 __all__ = [
     "ContextEngine",
+    "ContextEngineMCPServer",
+    "build_server",
     "LLMClient",
     "LLMResponse",
     "AnthropicClient",
@@ -73,6 +80,9 @@ __all__ = [
     "MemoryAssembler",
     "MemoryWriter",
     "WriteResult",
+    "MemoryCompactor",
+    "CompactResult",
+    "SUMMARY_KEY",
     "WritePolicy",
     "AllowAllPolicy",
     "RoleBasedWritePolicy",
@@ -96,7 +106,8 @@ __all__ = [
     "CharEstimateTokenizer",
     "TiktokenTokenizer",
     "AnthropicTokenizer",
+    "AsyncAnthropicTokenizer",
     "get_tokenizer",
 ]
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"

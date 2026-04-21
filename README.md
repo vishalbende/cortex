@@ -19,7 +19,7 @@ Framework-agnostic. Vectorless. KV-cache-aware.**
 <sub>Anthropic · OpenAI · any MCP server · Python 3.10+</sub>
 
 ![status](https://img.shields.io/badge/status-alpha-yellow)
-![tests](https://img.shields.io/badge/tests-138%20passing-green)
+![tests](https://img.shields.io/badge/tests-160%20passing-green)
 ![python](https://img.shields.io/badge/python-3.10%2B-blue)
 ![license](https://img.shields.io/badge/license-MIT-lightgrey)
 
@@ -305,12 +305,15 @@ Shipped in `v0.2.0`:
 - [x] **Dashboard consuming JSONL telemetry** — `contextengine dashboard <traces.jsonl> [--format html]` renders a static report (zero deps).
 - [x] **Framework-agnostic memory query API** — `MemoryQuery` with `list_facts(pattern)`, `list_events(since, until)`, `history(key)`, `export()` / `export_json()`, `erase()` (GDPR), and LLM-backed `ask(question)`.
 
-Next:
+Shipped in `v0.3.0`:
 
-- [ ] Native memory compaction (summarize stale facts, not just history).
-- [ ] `AnthropicTokenizer` async variant for router/writer hot paths.
-- [ ] MCP server mode (run contextengine itself as an MCP so non-Python agents can plug in).
-- [ ] Hosted web dashboard (auth + multi-tenant on top of the existing JSONL summarizer).
+- [x] **Native memory compaction** — `MemoryCompactor` folds stale facts + old events into a versioned `__memory.summary` fact, preserves high-version or recently-referenced facts, prunes the rest.
+- [x] **Async Anthropic tokenizer** — `AsyncAnthropicTokenizer` via `AsyncAnthropic.messages.count_tokens`, hash-cached, with `count_many()` for concurrent batches.
+- [x] **MCP server mode** — `contextengine mcp-server` runs contextengine itself as an MCP (stdio). Proxies every downstream MCP tool (namespaced) plus seven meta-tools: `ce.remember`, `ce.recall`, `ce.ask_memory`, `ce.route`, `ce.handoff`, `ce.export_memory`, `ce.erase_memory`. Claude Code / Cursor / Claude Desktop can now consume contextengine without any Python SDK.
+- [x] **Live dashboard server** — `contextengine dashboard-serve` serves an auto-refreshing HTML view + `/summary` JSON + `/health`. Optional `Authorization: Bearer` token via env. Zero deps (stdlib `http.server`).
+
+Open:
+
 - [ ] Node/TypeScript port of the router + assembler surface.
 
 ## License

@@ -21,6 +21,12 @@ class MemoryStore(Protocol):
 
     async def delete(self, entity_id: str) -> None: ...
 
+    async def delete_fact(self, *, entity_id: str, key: str) -> None: ...
+
+    async def prune_events(
+        self, *, entity_id: str, keep: tuple[Event, ...]
+    ) -> None: ...
+
 
 class InMemoryStore:
     """Process-local dict-backed store. Useful for tests and prototypes."""
@@ -53,6 +59,16 @@ class InMemoryStore:
     async def delete(self, entity_id: str) -> None:
         self._facts = {k: v for k, v in self._facts.items() if k[0] != entity_id}
         self._events.pop(entity_id, None)
+
+    async def delete_fact(self, *, entity_id: str, key: str) -> None:
+        self._facts.pop((entity_id, key), None)
+
+    async def prune_events(
+        self, *, entity_id: str, keep: tuple[Event, ...]
+    ) -> None:
+        keep_keys = {(e.ts, e.text) for e in keep}
+        events = self._events.get(entity_id, [])
+        self._events[entity_id] = [e for e in events if (e.ts, e.text) in keep_keys]
 
 
 class JSONStore:
@@ -161,3 +177,22 @@ class JSONStore:
         p = self._path(entity_id)
         if p.exists():
             p.unlink()
+
+    async def delete_fact(self, *, entity_id: str, key: str) -> None:
+        mem = self._load(entity_id)
+        new_facts = tuple(f for f in mem.facts if f.key != key)
+        if len(new_facts) == len(mem.facts):
+            return
+        self._save(
+            EntityMemory(entity_id=entity_id, facts=new_facts, events=mem.events)
+        )
+
+    async def prune_events(
+        self, *, entity_id: str, keep: tuple[Event, ...]
+    ) -> None:
+        mem = self._load(entity_id)
+        keep_keys = {(e.ts, e.text) for e in keep}
+        new_events = tuple(e for e in mem.events if (e.ts, e.text) in keep_keys)
+        self._save(
+            EntityMemory(entity_id=entity_id, facts=mem.facts, events=new_events)
+        )

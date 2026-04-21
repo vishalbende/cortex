@@ -1,6 +1,7 @@
 """Entity memory: facts, events, permission-scoped assembly, async writeback."""
 
 from contextengine.memory.assembler import MemoryAssembler
+from contextengine.memory.compactor import SUMMARY_KEY, CompactResult, MemoryCompactor
 from contextengine.memory.policy import (
     AllowAllPolicy,
     PolicyViolation,
@@ -23,6 +24,9 @@ __all__ = [
     "MemoryAssembler",
     "MemoryWriter",
     "WriteResult",
+    "MemoryCompactor",
+    "CompactResult",
+    "SUMMARY_KEY",
     "WritePolicy",
     "AllowAllPolicy",
     "RoleBasedWritePolicy",
