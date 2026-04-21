@@ -19,7 +19,7 @@ Framework-agnostic. Vectorless. KV-cache-aware.**
 <sub>Anthropic · OpenAI · any MCP server · Python 3.10+</sub>
 
 ![status](https://img.shields.io/badge/status-alpha-yellow)
-![tests](https://img.shields.io/badge/tests-87%20passing-green)
+![tests](https://img.shields.io/badge/tests-138%20passing-green)
 ![python](https://img.shields.io/badge/python-3.10%2B-blue)
 ![license](https://img.shields.io/badge/license-MIT-lightgrey)
 
@@ -295,13 +295,23 @@ pytest
 
 ## Roadmap
 
-- [ ] Multi-agent context coordination (shared memory, handoff protocol)
-- [ ] Permission-scoped memory *writes* (not just reads)
-- [ ] Streaming assemble + partial tool-set refinement mid-response
-- [ ] Native Anthropic server-side token counting
-- [ ] LangChain / LangGraph adapters
-- [ ] Hosted dashboard consuming the JSONL telemetry
-- [ ] Framework-agnostic memory query API (GDPR deletion, fact versioning UI)
+Shipped in `v0.2.0`:
+
+- [x] **Multi-agent context coordination** — `MultiAgentCoordinator` with shared `MemoryStore` + `HandoffProtocol` for inter-role transfers.
+- [x] **Permission-scoped memory *writes*** — `WritePolicy` / `RoleBasedWritePolicy` + glob-pattern rules; writer returns `facts_rejected` / `events_rejected` counts.
+- [x] **Streaming assemble + mid-response tool refinement** — `stream_assemble()` async iterator and `refine_tools_for_followup()` (append-only to preserve KV cache).
+- [x] **Native Anthropic server-side token counting** — `AnthropicTokenizer` via `messages.count_tokens`, hash-cached.
+- [x] **LangChain / LangGraph adapters** — `assemble_to_langchain()`, `tools_to_langchain_schemas()`, `langgraph_context_node()` factory.
+- [x] **Dashboard consuming JSONL telemetry** — `contextengine dashboard <traces.jsonl> [--format html]` renders a static report (zero deps).
+- [x] **Framework-agnostic memory query API** — `MemoryQuery` with `list_facts(pattern)`, `list_events(since, until)`, `history(key)`, `export()` / `export_json()`, `erase()` (GDPR), and LLM-backed `ask(question)`.
+
+Next:
+
+- [ ] Native memory compaction (summarize stale facts, not just history).
+- [ ] `AnthropicTokenizer` async variant for router/writer hot paths.
+- [ ] MCP server mode (run contextengine itself as an MCP so non-Python agents can plug in).
+- [ ] Hosted web dashboard (auth + multi-tenant on top of the existing JSONL summarizer).
+- [ ] Node/TypeScript port of the router + assembler surface.
 
 ## License
 

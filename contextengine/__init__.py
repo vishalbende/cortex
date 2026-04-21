@@ -1,19 +1,44 @@
 """contextengine — MCP-aware context orchestration for LLM agents."""
 
+from contextengine.coordination import (
+    AgentView,
+    Handoff,
+    HandoffProtocol,
+    MultiAgentCoordinator,
+)
 from contextengine.engine import ContextEngine
 from contextengine.llm import AnthropicClient, LLMClient, LLMResponse, OpenAIClient
 from contextengine.memory import (
+    AllowAllPolicy,
     EntityMemory,
     Event,
     Fact,
     InMemoryStore,
     JSONStore,
     MemoryAssembler,
+    MemoryQuery,
     MemoryStore,
     MemoryWriter,
+    PolicyViolation,
+    QueryResult,
+    RoleBasedWritePolicy,
+    Rule,
+    WritePolicy,
     WriteResult,
 )
+from contextengine.streaming import (
+    AssembleChunk,
+    refine_tools_for_followup,
+    stream_assemble,
+)
 from contextengine.telemetry import FileSink, Sink, StdoutSink, TraceRecord, TraceRecorder
+from contextengine.tokenize import (
+    AnthropicTokenizer,
+    CharEstimateTokenizer,
+    TiktokenTokenizer,
+    Tokenizer,
+    get_tokenizer,
+)
 from contextengine.types import (
     AssembleResult,
     AssembleStats,
@@ -48,11 +73,30 @@ __all__ = [
     "MemoryAssembler",
     "MemoryWriter",
     "WriteResult",
+    "WritePolicy",
+    "AllowAllPolicy",
+    "RoleBasedWritePolicy",
+    "Rule",
+    "PolicyViolation",
+    "MemoryQuery",
+    "QueryResult",
+    "Handoff",
+    "HandoffProtocol",
+    "MultiAgentCoordinator",
+    "AgentView",
+    "AssembleChunk",
+    "stream_assemble",
+    "refine_tools_for_followup",
     "TraceRecord",
     "TraceRecorder",
     "Sink",
     "FileSink",
     "StdoutSink",
+    "Tokenizer",
+    "CharEstimateTokenizer",
+    "TiktokenTokenizer",
+    "AnthropicTokenizer",
+    "get_tokenizer",
 ]
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"

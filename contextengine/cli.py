@@ -108,12 +108,24 @@ def main(argv: list[str] | None = None) -> int:
 
     sub.add_parser("catalog", help="print the hierarchical MCP catalog")
 
+    dash = sub.add_parser("dashboard", help="summarize a JSONL telemetry file")
+    dash.add_argument("traces", help="path to JSONL traces")
+    dash.add_argument("--format", choices=["text", "html"], default="text")
+    dash.add_argument("--output", "-o", default=None)
+
     args = parser.parse_args(argv)
 
     if args.cmd == "run":
         return asyncio.run(_cmd_run(args))
     if args.cmd == "catalog":
         return asyncio.run(_cmd_catalog(args))
+    if args.cmd == "dashboard":
+        from contextengine.dashboard import main as dashboard_main
+
+        passthrough = [args.traces, "--format", args.format]
+        if args.output:
+            passthrough += ["-o", args.output]
+        return dashboard_main(passthrough)
     return 1
 
 
