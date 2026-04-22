@@ -6,7 +6,7 @@ import pytest
 from contextengine import ContextEngine, MCPServer
 from contextengine.router import Router
 from contextengine.types import Catalog, MCPCatalog, Message, Tool, ToolCategory
-from tests.fakes import FakeAnthropicClient
+from tests.fakes import FakeLLMClient
 
 
 def _tool(name: str, mcp: str, tokens: int = 50) -> Tool:
@@ -20,7 +20,7 @@ def _tool(name: str, mcp: str, tokens: int = 50) -> Tool:
     )
 
 
-def _seed_engine(e: ContextEngine, client: FakeAnthropicClient) -> None:
+def _seed_engine(e: ContextEngine, llm: FakeLLMClient) -> None:
     linear = MCPCatalog(
         name="linear",
         summary="Linear issue tracker.",
@@ -45,11 +45,7 @@ def _seed_engine(e: ContextEngine, client: FakeAnthropicClient) -> None:
     )
     catalog = Catalog(mcps=(linear, stripe), version_hash="v1")
     e._catalog = catalog
-    e._router = Router(
-        catalog=catalog,
-        router_model=e.router_model,
-        anthropic_client=client,
-    )
+    e._router = Router(catalog=catalog, router_model=e.router_model, llm=llm)
 
 
 async def test_assemble_end_to_end_with_budget_pack() -> None:
@@ -60,14 +56,14 @@ async def test_assemble_end_to_end_with_budget_pack() -> None:
         budget=1000,
         reserved_output=0,
     )
-    client = FakeAnthropicClient(
+    llm = FakeLLMClient(
         responses=[
             json.dumps({"mcps": ["stripe", "linear"]}),
             json.dumps({"tools": ["stripe.create_refund"]}),
             json.dumps({"tools": ["linear.create_issue"]}),
         ]
     )
-    _seed_engine(e, client)
+    _seed_engine(e, llm)
 
     history = [
         Message(role="user", content="hi"),
@@ -90,10 +86,8 @@ async def test_assemble_with_memory_block() -> None:
         model="claude-sonnet-4-5",
         system_prompt="agent.",
     )
-    client = FakeAnthropicClient(
-        responses=[json.dumps({"tools": ["linear.create_issue"]})]
-    )
-    _seed_engine(e, client)
+    llm = FakeLLMClient(responses=[json.dumps({"tools": ["linear.create_issue"]})])
+    _seed_engine(e, llm)
 
     result = await e.assemble(
         message="create an issue",
@@ -109,13 +103,13 @@ async def test_assemble_respects_required_tools() -> None:
         mcps=[MCPServer(name="linear", command=["x"]), MCPServer(name="stripe", url="http://y")],
         model="claude-sonnet-4-5",
     )
-    client = FakeAnthropicClient(
+    llm = FakeLLMClient(
         responses=[
             json.dumps({"mcps": ["linear"]}),
             json.dumps({"tools": []}),
         ]
     )
-    _seed_engine(e, client)
+    _seed_engine(e, llm)
 
     result = await e.assemble(
         message="do anything",

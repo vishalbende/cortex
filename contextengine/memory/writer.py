@@ -6,6 +6,14 @@ from dataclasses import dataclass
 from typing import Any
 
 from contextengine._json import extract_json
+from contextengine.llm.base import LLMClient
+from contextengine.memory.policy import (
+    AllowAllPolicy,
+    PolicyViolation,
+    WritePolicy,
+    enforce_append,
+    enforce_upsert,
+)
 from contextengine.memory.store import MemoryStore
 from contextengine.memory.types import Event, Fact
 
@@ -14,6 +22,8 @@ from contextengine.memory.types import Event, Fact
 class WriteResult:
     facts_upserted: int
     events_appended: int
+    facts_rejected: int = 0
+    events_rejected: int = 0
     rationale: str = ""
 
 
@@ -21,14 +31,9 @@ class MemoryWriter:
     """Extracts durable facts and timeline events from a completed turn.
 
     Uses a cheap LLM (same model class as the router) to read the
-    assistant's response and tool results, then emit structured updates
-    to the store. Intended to be called async/non-blocking after each
-    turn via `ContextEngine.process_turn(...)`.
-
-    Extraction prompt:
-        "You are a memory writer. Read the turn and return JSON with two
-        arrays: facts (entity-scoped key/value that is durably true now)
-        and events (one-sentence descriptions of what happened this turn)."
+    assistant's response and tool results, then emits structured updates
+    to the store. Provider-agnostic via LLMClient — works with either
+    Claude or GPT models.
     """
 
     def __init__(
@@ -36,18 +41,13 @@ class MemoryWriter:
         *,
         store: MemoryStore,
         model: str,
-        anthropic_client: Any = None,
+        llm: LLMClient,
+        policy: WritePolicy | None = None,
     ) -> None:
         self.store = store
         self.model = model
-        self._client = anthropic_client
-
-    async def _client_instance(self) -> Any:
-        if self._client is None:
-            import anthropic
-
-            self._client = anthropic.AsyncAnthropic()
-        return self._client
+        self._llm = llm
+        self._policy: WritePolicy = policy or AllowAllPolicy()
 
     async def write(
         self,
@@ -77,49 +77,65 @@ class MemoryWriter:
             f"Return ONLY the JSON, no preamble."
         )
 
-        client = await self._client_instance()
-        response = await client.messages.create(
+        response = await self._llm.complete(
             model=self.model,
+            system="",
+            user=prompt,
             max_tokens=1024,
-            messages=[{"role": "user", "content": prompt}],
+            json_mode=True,
         )
-        data = extract_json(response.content[0].text)
+        data = extract_json(response.text)
 
         now = time.time()
         visibility = (role,) if role else ()
 
         fact_count = 0
+        facts_rejected = 0
         for f in data.get("facts", []):
             key = f.get("key")
             value = f.get("value")
             if not key or value is None:
                 continue
-            await self.store.upsert_fact(
-                Fact(
-                    entity_id=entity_id,
-                    key=str(key),
-                    value=str(value),
-                    source=str(f.get("source", "")),
-                    ts=now,
-                    visibility=visibility,
-                )
+            fact = Fact(
+                entity_id=entity_id,
+                key=str(key),
+                value=str(value),
+                source=str(f.get("source", "")),
+                ts=now,
+                visibility=visibility,
             )
+            try:
+                enforce_upsert(self._policy, role, fact)
+            except PolicyViolation:
+                facts_rejected += 1
+                continue
+            await self.store.upsert_fact(fact)
             fact_count += 1
 
         event_count = 0
+        events_rejected = 0
         for e in data.get("events", []):
             text = e.get("text")
             if not text:
                 continue
-            await self.store.append_event(
-                Event(
-                    entity_id=entity_id,
-                    text=str(text),
-                    source=str(e.get("source", "")),
-                    ts=now,
-                    visibility=visibility,
-                )
+            event = Event(
+                entity_id=entity_id,
+                text=str(text),
+                source=str(e.get("source", "")),
+                ts=now,
+                visibility=visibility,
             )
+            try:
+                enforce_append(self._policy, role, event)
+            except PolicyViolation:
+                events_rejected += 1
+                continue
+            await self.store.append_event(event)
             event_count += 1
 
-        return WriteResult(facts_upserted=fact_count, events_appended=event_count)
+        return WriteResult(
+            facts_upserted=fact_count,
+            events_appended=event_count,
+            facts_rejected=facts_rejected,
+            events_rejected=events_rejected,
+        )

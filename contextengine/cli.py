@@ -108,13 +108,61 @@ def main(argv: list[str] | None = None) -> int:
 
     sub.add_parser("catalog", help="print the hierarchical MCP catalog")
 
+    dash = sub.add_parser("dashboard", help="summarize a JSONL telemetry file")
+    dash.add_argument("traces", help="path to JSONL traces")
+    dash.add_argument("--format", choices=["text", "html"], default="text")
+    dash.add_argument("--output", "-o", default=None)
+
+    serve = sub.add_parser(
+        "dashboard-serve",
+        help="serve a live auto-refreshing dashboard from a JSONL file",
+    )
+    serve.add_argument("traces")
+    serve.add_argument("--host", default="127.0.0.1")
+    serve.add_argument("--port", type=int, default=8765)
+    serve.add_argument("--auth-token", default=None)
+
+    mcp_srv = sub.add_parser(
+        "mcp-server",
+        help="run contextengine itself as an MCP server (stdio)",
+    )
+    mcp_srv.add_argument("--transport", choices=["stdio"], default="stdio")
+
     args = parser.parse_args(argv)
 
     if args.cmd == "run":
         return asyncio.run(_cmd_run(args))
     if args.cmd == "catalog":
         return asyncio.run(_cmd_catalog(args))
+    if args.cmd == "dashboard":
+        from contextengine.dashboard import main as dashboard_main
+
+        passthrough = [args.traces, "--format", args.format]
+        if args.output:
+            passthrough += ["-o", args.output]
+        return dashboard_main(passthrough)
+    if args.cmd == "dashboard-serve":
+        from contextengine.dashboard_server import main as serve_main
+
+        passthrough = [args.traces, "--host", args.host, "--port", str(args.port)]
+        if args.auth_token:
+            passthrough += ["--auth-token", args.auth_token]
+        return serve_main(passthrough)
+    if args.cmd == "mcp-server":
+        return asyncio.run(_cmd_mcp_server(args))
     return 1
+
+
+async def _cmd_mcp_server(args: argparse.Namespace) -> int:
+    from contextengine.server.app import run_stdio
+
+    engine = _build_engine(args)
+    await engine.start()
+    try:
+        await run_stdio(engine)
+    finally:
+        await engine.close()
+    return 0
 
 
 if __name__ == "__main__":

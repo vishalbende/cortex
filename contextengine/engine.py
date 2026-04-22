@@ -9,6 +9,8 @@ from typing import Any
 from contextengine.budget import Budget, pack
 from contextengine.catalog import build_catalog
 from contextengine.compaction import HistoryCompactor
+from contextengine.llm.base import LLMClient
+from contextengine.llm.registry import client_for_model
 from contextengine.mcp.pool import MCPPool
 from contextengine.memory.assembler import MemoryAssembler
 from contextengine.memory.store import InMemoryStore, MemoryStore
@@ -27,7 +29,14 @@ from contextengine.types import (
 
 
 class ContextEngine:
-    """MCP-aware context orchestration — routing, memory, telemetry, proxying."""
+    """MCP-aware context orchestration — routing, memory, telemetry, proxying.
+
+    Supports Anthropic and OpenAI models for internal LLM calls (routing,
+    categorization, memory writeback, compaction). The provider is
+    auto-detected from the model string — models starting with `claude*`
+    use Anthropic, `gpt*`/`o1`/`o3`/`o4` use OpenAI. Override by passing
+    an explicit `llm_client`, `anthropic_client`, or `openai_client`.
+    """
 
     def __init__(
         self,
@@ -42,6 +51,8 @@ class ContextEngine:
         system_prompt: str = "",
         cache_dir: str | Path = ".contextengine",
         anthropic_client: Any = None,
+        openai_client: Any = None,
+        llm_client: LLMClient | None = None,
         tokenizer: Tokenizer | None = None,
         memory_store: MemoryStore | None = None,
         telemetry_sinks: list[Sink] | None = None,
@@ -59,7 +70,21 @@ class ContextEngine:
         self.budget = Budget(total=budget, reserved_output=reserved_output)
         self.memory_budget = memory_budget
         self.tokenizer = tokenizer or get_tokenizer(model)
-        self._client = anthropic_client
+
+        self._anthropic_client = anthropic_client
+        self._openai_client = openai_client
+
+        def _resolve(model_id: str) -> LLMClient:
+            if llm_client is not None:
+                return llm_client
+            return client_for_model(
+                model_id,
+                anthropic_client=anthropic_client,
+                openai_client=openai_client,
+            )
+
+        self._router_llm = _resolve(self.router_model)
+        self._memory_llm = _resolve(self.memory_model)
 
         self._pool = MCPPool(mcps, tokenizer=self.tokenizer)
         self._catalog: Catalog | None = None
@@ -70,16 +95,16 @@ class ContextEngine:
         self._memory_writer = MemoryWriter(
             store=self._memory_store,
             model=self.memory_model,
-            anthropic_client=anthropic_client,
+            llm=self._memory_llm,
         )
 
         self._telemetry = TraceRecorder(sinks=list(telemetry_sinks or []))
 
         self._compactor = HistoryCompactor(
             model=self.memory_model,
+            llm=self._memory_llm,
             threshold=compaction_threshold,
             keep_recent=compaction_keep_recent,
-            anthropic_client=anthropic_client,
         )
 
     @property
@@ -104,13 +129,13 @@ class ContextEngine:
         self._catalog = await build_catalog(
             tools_by_mcp=tools_by_mcp,
             router_model=self.router_model,
-            anthropic_client=self._client,
+            llm=self._router_llm,
             cache_dir=self.cache_dir,
         )
         self._router = Router(
             catalog=self._catalog,
             router_model=self.router_model,
-            anthropic_client=self._client,
+            llm=self._router_llm,
         )
 
     async def add_mcp(self, server: MCPServer) -> None:
@@ -256,11 +281,9 @@ class ContextEngine:
         return result
 
     async def execute(self, tool_use: Any) -> Any:
-        """Proxy an Anthropic tool_use block to the owning MCP server.
+        """Proxy a tool_use block (dict or object form) to the owning MCP server.
 
-        Accepts either a content block object (with `.name` and `.input`)
-        or a dict with the same keys. The tool name must be namespaced
-        as `<mcp>.<tool>`.
+        The tool name must be namespaced as `<mcp>.<tool>`.
         """
         name = getattr(tool_use, "name", None)
         if name is None and isinstance(tool_use, dict):
@@ -293,12 +316,7 @@ class ContextEngine:
         tool_results: list[dict[str, Any]] | None = None,
         role: str = "",
     ) -> WriteResult:
-        """Write durable facts + events extracted from a completed turn.
-
-        Call this after each assistant turn to keep memory fresh for the
-        next assemble(). Uses a cheap LLM; safe to run concurrently with
-        the next user turn.
-        """
+        """Write durable facts + events extracted from a completed turn."""
         return await self._memory_writer.write(
             entity_id=entity_id,
             user_message=user_message,

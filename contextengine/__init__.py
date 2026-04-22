@@ -1,18 +1,49 @@
 """contextengine — MCP-aware context orchestration for LLM agents."""
 
+from contextengine.server import ContextEngineMCPServer, build_server
+from contextengine.coordination import (
+    AgentView,
+    Handoff,
+    HandoffProtocol,
+    MultiAgentCoordinator,
+)
 from contextengine.engine import ContextEngine
+from contextengine.llm import AnthropicClient, LLMClient, LLMResponse, OpenAIClient
 from contextengine.memory import (
+    SUMMARY_KEY,
+    AllowAllPolicy,
+    CompactResult,
     EntityMemory,
     Event,
     Fact,
     InMemoryStore,
     JSONStore,
     MemoryAssembler,
+    MemoryCompactor,
+    MemoryQuery,
     MemoryStore,
     MemoryWriter,
+    PolicyViolation,
+    QueryResult,
+    RoleBasedWritePolicy,
+    Rule,
+    WritePolicy,
     WriteResult,
 )
+from contextengine.streaming import (
+    AssembleChunk,
+    refine_tools_for_followup,
+    stream_assemble,
+)
 from contextengine.telemetry import FileSink, Sink, StdoutSink, TraceRecord, TraceRecorder
+from contextengine.tokenize import (
+    AnthropicTokenizer,
+    AsyncAnthropicTokenizer,
+    CharEstimateTokenizer,
+    TiktokenTokenizer,
+    Tokenizer,
+    get_tokenizer,
+)
 from contextengine.types import (
     AssembleResult,
     AssembleStats,
@@ -26,6 +57,12 @@ from contextengine.types import (
 
 __all__ = [
     "ContextEngine",
+    "ContextEngineMCPServer",
+    "build_server",
+    "LLMClient",
+    "LLMResponse",
+    "AnthropicClient",
+    "OpenAIClient",
     "MCPServer",
     "Tool",
     "ToolCategory",
@@ -43,11 +80,34 @@ __all__ = [
     "MemoryAssembler",
     "MemoryWriter",
     "WriteResult",
+    "MemoryCompactor",
+    "CompactResult",
+    "SUMMARY_KEY",
+    "WritePolicy",
+    "AllowAllPolicy",
+    "RoleBasedWritePolicy",
+    "Rule",
+    "PolicyViolation",
+    "MemoryQuery",
+    "QueryResult",
+    "Handoff",
+    "HandoffProtocol",
+    "MultiAgentCoordinator",
+    "AgentView",
+    "AssembleChunk",
+    "stream_assemble",
+    "refine_tools_for_followup",
     "TraceRecord",
     "TraceRecorder",
     "Sink",
     "FileSink",
     "StdoutSink",
+    "Tokenizer",
+    "CharEstimateTokenizer",
+    "TiktokenTokenizer",
+    "AnthropicTokenizer",
+    "AsyncAnthropicTokenizer",
+    "get_tokenizer",
 ]
 
-__version__ = "0.1.0"
+__version__ = "0.3.0"

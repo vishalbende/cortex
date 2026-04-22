@@ -3,9 +3,9 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass
-from typing import Any
 
 from contextengine._json import extract_json
+from contextengine.llm.base import LLMClient
 from contextengine.types import Catalog, MCPCatalog, Tool
 
 
@@ -26,10 +26,10 @@ class Router:
     and tool descriptions. Decisions are memoized by
     (message_hash, catalog.version_hash).
 
-    Prompt caching: both passes mark the catalog block as the stable
-    prefix via Anthropic's `cache_control: {type: "ephemeral"}`. The
-    variable suffix is the user message. Across many assemble() calls in
-    one session the prefix hits the KV cache and cost drops to ~0.
+    Provider-agnostic via LLMClient: pass an AnthropicClient, OpenAIClient,
+    or anything implementing the `complete()` protocol. The router hands
+    the stable catalog prefix to the client as `stable_prefix=...` so the
+    provider can apply its own caching policy.
     """
 
     def __init__(
@@ -37,11 +37,11 @@ class Router:
         *,
         catalog: Catalog,
         router_model: str,
-        anthropic_client: Any = None,
+        llm: LLMClient,
     ) -> None:
         self.catalog = catalog
         self.router_model = router_model
-        self._client = anthropic_client
+        self._llm = llm
         self._cache: dict[tuple[str, str], RouteDecision] = {}
 
     async def select(
@@ -85,13 +85,6 @@ class Router:
         self._cache[key] = decision
         return decision
 
-    async def _client_instance(self) -> Any:
-        if self._client is None:
-            import anthropic
-
-            self._client = anthropic.AsyncAnthropic()
-        return self._client
-
     async def _select_mcps(self, message: str) -> list[str]:
         if not self.catalog.mcps:
             return []
@@ -111,21 +104,15 @@ class Router:
             f"could plausibly help."
         )
 
-        client = await self._client_instance()
-        response = await client.messages.create(
+        response = await self._llm.complete(
             model=self.router_model,
+            system=system,
+            stable_prefix=stable_prefix,
+            user=f"User message: {message}",
             max_tokens=512,
-            system=[
-                {"type": "text", "text": system},
-                {
-                    "type": "text",
-                    "text": stable_prefix,
-                    "cache_control": {"type": "ephemeral"},
-                },
-            ],
-            messages=[{"role": "user", "content": f"User message: {message}"}],
+            json_mode=True,
         )
-        data = extract_json(response.content[0].text)
+        data = extract_json(response.text)
         mcps = data.get("mcps", [])
         return [m for m in mcps if isinstance(m, str)]
 
@@ -154,20 +141,14 @@ class Router:
             f"meaningfully help. Prefer fewer."
         )
 
-        client = await self._client_instance()
-        response = await client.messages.create(
+        response = await self._llm.complete(
             model=self.router_model,
+            system=system,
+            stable_prefix=stable_prefix,
+            user=f"User message: {message}",
             max_tokens=1024,
-            system=[
-                {"type": "text", "text": system},
-                {
-                    "type": "text",
-                    "text": stable_prefix,
-                    "cache_control": {"type": "ephemeral"},
-                },
-            ],
-            messages=[{"role": "user", "content": f"User message: {message}"}],
+            json_mode=True,
         )
-        data = extract_json(response.content[0].text)
+        data = extract_json(response.text)
         by_name = {t.name: t for t in mcp.tools_flat}
         return [by_name[n] for n in data.get("tools", []) if n in by_name]

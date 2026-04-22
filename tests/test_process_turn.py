@@ -4,11 +4,11 @@ import json
 import pytest
 
 from contextengine import ContextEngine, MCPServer
-from tests.fakes import FakeAnthropicClient
+from tests.fakes import FakeLLMClient
 
 
 async def test_process_turn_writes_memory() -> None:
-    client = FakeAnthropicClient(
+    llm = FakeLLMClient(
         responses=[
             json.dumps(
                 {
@@ -21,7 +21,7 @@ async def test_process_turn_writes_memory() -> None:
     engine = ContextEngine(
         mcps=[MCPServer(name="linear", command=["x"])],
         model="claude-sonnet-4-5",
-        anthropic_client=client,
+        llm_client=llm,
     )
     result = await engine.process_turn(
         entity_id="c1",
@@ -36,7 +36,7 @@ async def test_process_turn_writes_memory() -> None:
 
 
 async def test_process_turn_role_scoping() -> None:
-    client = FakeAnthropicClient(
+    llm = FakeLLMClient(
         responses=[
             json.dumps(
                 {
@@ -49,7 +49,7 @@ async def test_process_turn_role_scoping() -> None:
     engine = ContextEngine(
         mcps=[MCPServer(name="linear", command=["x"])],
         model="claude-sonnet-4-5",
-        anthropic_client=client,
+        llm_client=llm,
     )
     await engine.process_turn(
         entity_id="c1",
